@@ -467,6 +467,31 @@ def pbp_player_on_off(nba_team_id, player_id, season=None):
     return data.get("results", {})
 
 
+def pbp_season_schedule(season=None):
+    """Calendario COMPLETO de la temporada con marcador final, via
+    pbpstats.com (fuente independiente de ESPN, deriva de las jugadas
+    oficiales de la NBA) - un solo llamado trae los ~1230 juegos de toda
+    la liga con local/visitante y marcador final. Se usa como RESPALDO si
+    ESPN se bloquea (ver team_rolling_report en nba_report.py)."""
+    data = get_json(f"{PBP_BASE}/get-games/nba", params={
+        "Season": season_label(season), "SeasonType": "Regular Season",
+    })
+    return data.get("results", [])
+
+
+def pbp_team_game_log(nba_team_id, season=None):
+    """Historial de TODOS los juegos ya jugados de un equipo en la
+    temporada, con estadisticas avanzadas YA CALCULADAS por pbpstats.com
+    (EfgPct, TsPct, Pace, rebote%, etc.) - un solo llamado trae la
+    temporada completa, a diferencia de ESPN que pide juego por juego.
+    Respaldo independiente si ESPN se bloquea."""
+    data = get_json(f"{PBP_BASE}/get-game-logs/nba", params={
+        "Season": season_label(season), "SeasonType": "Regular Season",
+        "EntityType": "Team", "EntityId": str(nba_team_id),
+    })
+    return data.get("multi_row_table_data", [])
+
+
 def resolve_player_id(nba_team_id, name_query, season=None):
     roster = pbp_team_roster(nba_team_id, season=season)
     q = name_query.strip().lower()

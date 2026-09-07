@@ -102,16 +102,89 @@ def _avg(values):
     return sum(values) / len(values) if values else None
 
 
+def _pbp_game_advanced(team_row, opp_points):
+    """Convierte una fila de n.pbp_team_game_log() al mismo formato que
+    game_advanced() (ESPN), para que el resto del reporte no note la
+    diferencia de fuente. OffRtg se calcula contra OffPoss (posesiones
+    PROPIAS en ataque) y DefRtg contra DefPoss (posesiones PROPIAS en
+    defensa) - son distintas entre si (una tipica es ~99 vs ~101, nunca
+    exactamente iguales), NO la suma combinada TotalPoss (usar esa da un
+    rating como la mitad del real). No trae fast_break_pts/points_in_paint
+    - pbpstats no las expone con ese desglose en este endpoint - quedan en
+    None (son solo de contexto/diagnostico, no entran a la formula de
+    proyeccion ni pesan mucho en el modelo entrenado)."""
+    off_poss = team_row.get("OffPoss")
+    def_poss = team_row.get("DefPoss")
+    points = team_row.get("Points")
+    if not off_poss or points is None:
+        return None
+    makes = (team_row.get("FG2M") or 0) + (team_row.get("FG3M") or 0)
+    turnovers = team_row.get("Turnovers")
+    return {
+        "off_rtg": points / off_poss * 100,
+        "def_rtg": (opp_points / def_poss * 100) if (opp_points is not None and def_poss) else None,
+        "net_rtg": ((points / off_poss - opp_points / def_poss) * 100)
+                   if (opp_points is not None and def_poss) else None,
+        "pace": team_row.get("Pace"),
+        "efg_pct": team_row.get("EfgPct"),
+        "ts_pct": team_row.get("TsPct"),
+        "tov_pct": (turnovers / off_poss) if turnovers is not None else None,
+        "oreb_pct": team_row.get("OffFGReboundPct"),
+        "dreb_pct": team_row.get("DefFGReboundPct"),
+        "ast_pct": (team_row.get("Assists") / makes) if makes else None,
+        "fast_break_pts": None,
+        "points_in_paint": None,
+    }
+
+
+def _team_rolling_report_pbp_fallback(team, last_n, season):
+    """RESPALDO independiente de ESPN via pbpstats.com (deriva de las
+    jugadas oficiales de la NBA, en servidores distintos a los de ESPN) -
+    se activa solo cuando ESPN falla, para que un bloqueo de ESPN no tumbe
+    el reporte por completo. No trae puntos por cuarto (pbpstats no los
+    expone en este endpoint), asi que mientras se este en este modo el
+    desglose por cuarto usa el reparto neutral 25/25/25/25 (ya es el
+    comportamiento default de team_side_report cuando no hay datos de
+    cuarto, no hace falta logica nueva para eso)."""
+    try:
+        schedule = n.pbp_season_schedule(season)
+        rows = n.pbp_team_game_log(team["nba_id"], season)
+    except Exception as e:
+        print(f"    ERROR: tambien fallo el respaldo pbpstats.com para {team['full_name']}: {e}", file=sys.stderr)
+        return []
+
+    schedule_by_id = {g["GameId"]: g for g in schedule}
+    rows_sorted = sorted(rows, key=lambda row: row.get("Date") or "")
+    window = rows_sorted[-last_n:] if last_n else rows_sorted
+
+    per_game = []
+    for row in window:
+        game = schedule_by_id.get(row.get("GameId"))
+        if not game:
+            continue
+        is_home = str(game.get("HomeTeamId")) == str(team["nba_id"])
+        opp_points = game.get("AwayPoints") if is_home else game.get("HomePoints")
+        adv = _pbp_game_advanced(row, opp_points)
+        if not adv:
+            continue
+        fake_event = {"id": row.get("GameId"), "date": row.get("Date"), "opponent_espn_id": None}
+        per_game.append((fake_event, adv, []))
+    return per_game
+
+
 def team_rolling_report(team, last_n, season):
     """Recolecta los ultimos N juegos YA jugados del equipo, junta el
     boxscore propio y del rival de cada uno, y promedia las metricas
     avanzadas calculadas juego por juego (ventana movil, no temporada
-    completa)."""
+    completa). Si ESPN falla (bloqueo, limite de solicitudes agotado),
+    cae automaticamente al respaldo de pbpstats.com en vez de dejar el
+    reporte sin datos."""
     try:
         games = n.espn_played_games(team["espn_id"], season=season, last_n=last_n)
     except Exception as e:
-        print(f"  ERROR recolectando juegos de {team['full_name']}: {e}", file=sys.stderr)
-        return []
+        print(f"  ESPN fallo para {team['full_name']} ({e}) - usando respaldo pbpstats.com...", file=sys.stderr)
+        return _team_rolling_report_pbp_fallback(team, last_n, season)
+
     per_game = []
     for e in games:
         opp_espn_id = e["opponent_espn_id"]
@@ -128,6 +201,11 @@ def team_rolling_report(team, last_n, season):
         adv = game_advanced(my_stats, opp_stats, my_points, opp_points, len(quarters))
         if adv:
             per_game.append((e, adv, quarters))
+
+    if not per_game:
+        print(f"  ESPN no devolvio datos utilizables para {team['full_name']} - "
+              f"usando respaldo pbpstats.com...", file=sys.stderr)
+        return _team_rolling_report_pbp_fallback(team, last_n, season)
     return per_game
 
 
