@@ -344,15 +344,13 @@ def log_bet(gc, tier, nombre, partido, apuesta, monto, momio, resultado, fecha=N
     return dict(zip(BET_HEADERS, values))
 
 
-def get_full_history(gc, tier, nombre):
-    """Historial COMPLETO de un inversionista (apuestas + retiros/
-    depositos), con los numeros ya convertidos a float (no texto con
-    coma decimal) - pensado para graficas y analisis, no para escribir
-    de vuelta al Sheet."""
-    sh = _open_tier_sheet(gc, tier)
-    ws = _get_or_create_investor_tab(sh, nombre)
+def _parse_history_rows(rows):
+    """Convierte filas crudas (llaves = BET_HEADERS) al formato
+    simplificado de get_full_history (llaves cortas, numeros ya
+    convertidos a float) - compartido entre la lectura individual y la
+    lectura en lote."""
     out = []
-    for r in _read_bet_rows(ws):
+    for r in rows:
         try:
             monto = _parse_number(r["Inversion actual"])
             ganada_perdida = _parse_number(r["Ganada / Perdida"])
@@ -368,6 +366,55 @@ def get_full_history(gc, tier, nombre):
             "ganada_perdida": ganada_perdida,
             "saldo": saldo,
         })
+    return out
+
+
+def get_full_history(gc, tier, nombre):
+    """Historial COMPLETO de un inversionista (apuestas + retiros/
+    depositos), con los numeros ya convertidos a float (no texto con
+    coma decimal) - pensado para graficas y analisis, no para escribir
+    de vuelta al Sheet."""
+    sh = _open_tier_sheet(gc, tier)
+    ws = _get_or_create_investor_tab(sh, nombre)
+    return _parse_history_rows(_read_bet_rows(ws))
+
+
+_BATCH_ROW_LIMIT = 5000
+
+
+def get_full_history_batch(gc, tier, nombres):
+    """Historial COMPLETO de VARIOS inversionistas del MISMO nivel, en
+    UNA sola llamada a la API (values_batch_get) en vez de una llamada
+    por persona - la mejora clave para escalar a ~100 usuarios: en un
+    envio nocturno con 100 inversionistas en un nivel, esto reduce ~100
+    lecturas a 1 sola. Regresa {nombre: [fila, ...]} en el mismo formato
+    que get_full_history() (una entrada por nombre pedido, aunque este
+    vacia si el inversionista no tiene apuestas todavia)."""
+    if not nombres:
+        return {}
+    sh = _open_tier_sheet(gc, tier)
+    end_col = chr(ord(DATA_START_COL) + len(BET_HEADERS) - 1)
+    ranges = [f"'{n.replace(chr(39), chr(39) * 2)}'!{DATA_START_COL}{HEADER_ROW}:{end_col}{_BATCH_ROW_LIMIT}"
+              for n in nombres]
+
+    data = _con_reintentos(sh.values_batch_get, ranges)
+
+    out = {}
+    for nombre, value_range in zip(nombres, data.get("valueRanges", [])):
+        rows_raw = value_range.get("values", [])
+        # El rango ya empieza en la fila/columna de encabezados (B{HEADER_ROW}),
+        # asi que la primera fila devuelta ES el encabezado, no hace falta
+        # saltarse nada de columna A ni de filas antes de HEADER_ROW como
+        # en _read_bet_rows (que lee la hoja completa desde A1).
+        data_rows = rows_raw[1:] if rows_raw else []
+        parsed_rows = []
+        for row in data_rows:
+            cells = row[:len(BET_HEADERS)]
+            if not any(c.strip() for c in cells if c):
+                continue
+            cells = cells + [""] * (len(BET_HEADERS) - len(cells))
+            parsed_rows.append(dict(zip(BET_HEADERS, cells)))
+        out[nombre] = _parse_history_rows(parsed_rows)
     return out
 
 

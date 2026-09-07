@@ -1,8 +1,8 @@
 name: Recopilacion mensual de inversionistas NBA
 
 # Manda la recopilacion del mes que acaba de terminar a TODOS los
-# inversionistas registrados - corre el dia 1 de cada mes, justo despues
-# de medianoche hora de Mexico (CDMX).
+# inversionistas registrados - corre el dia 1 de cada mes a las 6:00am
+# hora de Mexico (CDMX).
 #
 # Se puede disparar de 2 formas:
 #   1. Solo, el dia 1 de cada mes (cron de abajo).
@@ -10,10 +10,10 @@ name: Recopilacion mensual de inversionistas NBA
 #      inversionistas NBA" -> "Run workflow" (util para probar).
 #
 # Mexico City es UTC-6 todo el anio (sin horario de verano desde 2022):
-# 06:00 UTC del dia 1 = 00:00 CDMX del dia 1 (justo al empezar el mes).
+# 12:00 UTC del dia 1 = 06:00 CDMX del dia 1.
 on:
   schedule:
-    - cron: "0 6 1 * *"
+    - cron: "0 12 1 * *"
   workflow_dispatch: {}
 
 permissions:

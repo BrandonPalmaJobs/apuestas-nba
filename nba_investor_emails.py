@@ -52,12 +52,12 @@ def _resultado_de(ganada_perdida_str):
     return "PUSH / SIN CAMBIO"
 
 
-def _stats_generales(gc, tier, nombre):
-    """Mismas estadisticas que la pestana de Analisis de la app: saldo
+def _stats_generales_de(historial, tier):
+    """Mismas estadisticas que la pestana de Analisis de la app (saldo
     actual, ganancia/perdida total, record ganadas-perdidas, efectividad,
-    total apostado - se calculan sobre el historial COMPLETO, no solo el
-    dia de hoy."""
-    historial = inv.get_full_history(gc, tier, nombre)
+    total apostado - todo el historial, no solo hoy), a partir de un
+    historial YA LEIDO (individual o de un lote con get_full_history_batch),
+    para no volver a leer Sheets aqui."""
     # saldo actual = el saldo de la ULTIMA fila ya leida - se evita una
     # segunda lectura completa de la pestana solo para el saldo (misma
     # lógica que get_investor_balance, pero sin repetir la llamada).
@@ -85,9 +85,9 @@ def _movimientos_del_mes(historial, year, month):
 
 
 def _stats_del_mes(historial, tier, year, month):
-    """Estadisticas ACOTADAS al mes (a diferencia de _stats_generales, que
-    es todo el historial): saldo al inicio/fin de mes, ganancia del mes,
-    record y efectividad SOLO de ese mes."""
+    """Estadisticas ACOTADAS al mes (a diferencia de _stats_generales_de,
+    que es todo el historial): saldo al inicio/fin de mes, ganancia del
+    mes, record y efectividad SOLO de ese mes."""
     prefijo = f"{year:04d}-{month:02d}"
     del_mes = _movimientos_del_mes(historial, year, month)
     antes_del_mes = [h for h in historial if (h["fecha"] or "") < prefijo]
@@ -364,13 +364,11 @@ def _movimientos_de_hoy(historial, fecha):
     return out
 
 
-def send_daily_report(gc, tier, nombre, correo, gmail_address, gmail_app_password, fecha=None):
-    """Arma y manda el correo de un inversionista para `fecha` (default
-    hoy, hora de CDMX - no la hora del servidor). Regresa (enviado: bool,
-    mensaje: str)."""
-    fecha = fecha or inv.cdmx_today()
-
-    stats = _stats_generales(gc, tier, nombre)
+def _build_and_send_daily(historial, tier, nombre, correo, gmail_address, gmail_app_password, fecha):
+    """Arma y manda el correo diario a partir de un historial YA LEIDO
+    (individual o de un lote) - separado de send_daily_report para poder
+    reusarlo desde send_daily_reports_batch sin volver a leer Sheets."""
+    stats = _stats_generales_de(historial, tier)
     movimientos = _movimientos_de_hoy(stats["historial"], fecha)
 
     images = {}
@@ -396,23 +394,53 @@ def send_daily_report(gc, tier, nombre, correo, gmail_address, gmail_app_passwor
         return False, f"Fallo el envio a {correo}: {e}"
 
 
-def send_monthly_report(gc, tier, nombre, correo, gmail_address, gmail_app_password, year=None, month=None):
-    """Arma y manda la recopilacion mensual de un inversionista: todos
-    los movimientos de `month`/`year` (default el mes que acaba de
-    terminar, hora CDMX), saldo al inicio/fin de ese mes, y record de
-    efectividad SOLO de ese mes. Regresa (enviado: bool, mensaje: str)."""
-    if year is None or month is None:
-        hoy = inv.cdmx_today()
-        anio_hoy, mes_hoy, _ = (int(x) for x in hoy.split("-"))
-        if mes_hoy == 1:
-            year, month = anio_hoy - 1, 12
-        else:
-            year, month = anio_hoy, mes_hoy - 1
+def send_daily_report(gc, tier, nombre, correo, gmail_address, gmail_app_password, fecha=None):
+    """Arma y manda el correo de UN inversionista (lee su historial
+    aparte) para `fecha` (default hoy, hora de CDMX). Uso individual (ej.
+    el boton de prueba en la app) - para mandarle a todo un nivel de una
+    vez usa send_daily_reports_batch, que lee en UNA sola llamada en vez
+    de una por persona."""
+    fecha = fecha or inv.cdmx_today()
+    historial = inv.get_full_history(gc, tier, nombre)
+    return _build_and_send_daily(historial, tier, nombre, correo, gmail_address, gmail_app_password, fecha)
 
+
+def send_daily_reports_batch(gc, tier, investors, gmail_address, gmail_app_password, fecha=None):
+    """Manda el correo diario a VARIOS inversionistas del mismo nivel,
+    leyendo el historial de TODOS en una sola llamada a la API (en vez de
+    una llamada por persona) - la mejora clave para escalar a ~100
+    usuarios. `investors` es una lista de dicts {nombre, correo, ...}
+    (lo que regresa list_investors). Regresa [(nombre, ok, mensaje), ...]."""
+    fecha = fecha or inv.cdmx_today()
+    nombres = [i["nombre"] for i in investors]
+    historiales = inv.get_full_history_batch(gc, tier, nombres)
+    resultados = []
+    for i in investors:
+        historial = historiales.get(i["nombre"], [])
+        ok, msg = _build_and_send_daily(
+            historial, tier, i["nombre"], i["correo"], gmail_address, gmail_app_password, fecha)
+        resultados.append((i["nombre"], ok, msg))
+    return resultados
+
+
+def _mes_a_reportar(year, month):
+    if year is not None and month is not None:
+        return year, month
+    hoy = inv.cdmx_today()
+    anio_hoy, mes_hoy, _ = (int(x) for x in hoy.split("-"))
+    if mes_hoy == 1:
+        return anio_hoy - 1, 12
+    return anio_hoy, mes_hoy - 1
+
+
+def _build_and_send_monthly(historial_completo, tier, nombre, correo, gmail_address, gmail_app_password,
+                             year, month):
+    """Arma y manda la recopilacion mensual a partir de un historial YA
+    LEIDO - separado de send_monthly_report para poder reusarlo desde
+    send_monthly_reports_batch sin volver a leer Sheets."""
     nombre_mes = MESES_ES[month]
     periodo_label = f"{nombre_mes} {year}"
 
-    historial_completo = inv.get_full_history(gc, tier, nombre)
     stats = _stats_del_mes(historial_completo, tier, year, month)
     movimientos = [
         {
@@ -450,3 +478,32 @@ def send_monthly_report(gc, tier, nombre, correo, gmail_address, gmail_app_passw
         return True, f"Correo mensual enviado a {correo}."
     except Exception as e:
         return False, f"Fallo el envio mensual a {correo}: {e}"
+
+
+def send_monthly_report(gc, tier, nombre, correo, gmail_address, gmail_app_password, year=None, month=None):
+    """Arma y manda la recopilacion mensual de UN inversionista (lee su
+    historial aparte): movimientos de `month`/`year` (default el mes que
+    acaba de terminar, hora CDMX), saldo al inicio/fin de ese mes, record
+    y efectividad SOLO de ese mes. Uso individual - para todo un nivel de
+    una vez usa send_monthly_reports_batch."""
+    year, month = _mes_a_reportar(year, month)
+    historial_completo = inv.get_full_history(gc, tier, nombre)
+    return _build_and_send_monthly(
+        historial_completo, tier, nombre, correo, gmail_address, gmail_app_password, year, month)
+
+
+def send_monthly_reports_batch(gc, tier, investors, gmail_address, gmail_app_password, year=None, month=None):
+    """Manda la recopilacion mensual a VARIOS inversionistas del mismo
+    nivel, leyendo el historial de TODOS en una sola llamada a la API -
+    ver send_daily_reports_batch, mismo patron. Regresa
+    [(nombre, ok, mensaje), ...]."""
+    year, month = _mes_a_reportar(year, month)
+    nombres = [i["nombre"] for i in investors]
+    historiales = inv.get_full_history_batch(gc, tier, nombres)
+    resultados = []
+    for i in investors:
+        historial = historiales.get(i["nombre"], [])
+        ok, msg = _build_and_send_monthly(
+            historial, tier, i["nombre"], i["correo"], gmail_address, gmail_app_password, year, month)
+        resultados.append((i["nombre"], ok, msg))
+    return resultados
