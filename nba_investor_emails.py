@@ -71,9 +71,9 @@ def send_email(to_email, subject, body, gmail_address, gmail_app_password):
 
 def send_daily_report(gc, tier, nombre, correo, gmail_address, gmail_app_password, fecha=None):
     """Arma y manda el correo de un inversionista para `fecha` (default
-    hoy). Regresa (enviado: bool, mensaje: str)."""
-    from datetime import date
-    fecha = fecha or date.today().isoformat()
+    hoy, hora de CDMX - no la hora del servidor). Regresa (enviado: bool,
+    mensaje: str)."""
+    fecha = fecha or inv.cdmx_today()
 
     movimientos = inv.get_bets_for_date(gc, tier, nombre, fecha)
     saldo = inv.get_investor_balance(gc, tier, nombre)

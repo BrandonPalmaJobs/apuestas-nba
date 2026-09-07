@@ -798,6 +798,20 @@ def render_inversionistas():
                     )
                     (st.success if ok else st.error)(msg)
 
+            st.divider()
+            st.caption(f"O manda el reporte de hoy a TODOS los inversionistas del nivel ${tier_c:,} de una vez "
+                       f"(uno por uno, cada quien con su propia informacion).")
+            if st.button(f"Enviar a todos los de ${tier_c:,}", disabled=not nombres_c):
+                resultados = []
+                for i in investors_c:
+                    ok, msg = ie.send_daily_report(
+                        gc, tier_c, i["nombre"], i["correo"],
+                        st.secrets["GMAIL_ADDRESS"], st.secrets["GMAIL_APP_PASSWORD"],
+                    )
+                    resultados.append((i["nombre"], ok, msg))
+                for nombre_r, ok, msg in resultados:
+                    (st.success if ok else st.error)(f"{nombre_r}: {msg}")
+
 
 # ---------------------------------------------------------------------------
 # Ajustes

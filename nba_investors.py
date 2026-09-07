@@ -28,7 +28,21 @@ financieras" (o cada Sheet individualmente) con el correo de esa cuenta
 de servicio, con permiso de Editor.
 """
 
-from datetime import date
+from datetime import datetime, timedelta, timezone
+
+# Mexico City es UTC-6 todo el anio (dejo de usar horario de verano desde
+# 2022) - se usa una zona fija en vez de date.today() porque el servidor
+# donde corre esto (Streamlit Cloud, GitHub Actions) usa UTC, no hora de
+# Mexico. Sin esto, una apuesta capturada de noche (hora CDMX) se guarda
+# con la fecha del dia SIGUIENTE en UTC, y el reporte nocturno de las
+# 11:50pm CDMX (que en UTC ya es el dia siguiente) buscaria la fecha
+# equivocada y no encontraria nada que reportar.
+CDMX_TZ = timezone(timedelta(hours=-6))
+
+
+def cdmx_today():
+    return datetime.now(CDMX_TZ).date().isoformat()
+
 
 TIER_SHEET_NAMES = {
     1000: "Inversores de $1,000",
@@ -99,13 +113,21 @@ def _get_or_create_investor_tab(sh, nombre):
     """Pestana de UN inversionista - si ya existe (ej. creada a mano por
     el usuario, como 'Mario Palma'), se usa tal cual sin tocar sus
     encabezados. Si no existe, se crea con el mismo formato exacto
-    (columna A vacia, encabezados en la fila 2 desde la columna B)."""
+    (columna A vacia, encabezados en la fila 2 desde la columna B, con
+    el mismo estilo de tabla: encabezado negro con letras blancas en
+    negrita, igual que las pestanas que el usuario ya arma a mano)."""
     import gspread
     try:
         return sh.worksheet(nombre)
     except gspread.exceptions.WorksheetNotFound:
         ws = sh.add_worksheet(title=nombre, rows=200, cols=len(BET_HEADERS) + 2)
-        ws.update(range_name=f"{DATA_START_COL}{HEADER_ROW}", values=[BET_HEADERS])
+        end_col = chr(ord(DATA_START_COL) + len(BET_HEADERS) - 1)
+        header_range = f"{DATA_START_COL}{HEADER_ROW}:{end_col}{HEADER_ROW}"
+        ws.update(range_name=header_range, values=[BET_HEADERS])
+        ws.format(header_range, {
+            "backgroundColor": {"red": 0, "green": 0, "blue": 0},
+            "textFormat": {"foregroundColor": {"red": 1, "green": 1, "blue": 1}, "bold": True},
+        })
         return ws
 
 
@@ -218,7 +240,7 @@ def move_investor_tier(gc, from_tier, to_tier, nombre, nuevo_saldo=None):
         raise ValueError(f"'{nombre}' ya esta registrado en el nivel ${to_tier}.")
     registro_to.append_row([nombre, telefono, correo])
     ws_to = _get_or_create_investor_tab(sh_to, nombre)
-    values = ["", date.today().isoformat(), f"Traspaso desde nivel ${from_tier:,}",
+    values = ["", cdmx_today(), f"Traspaso desde nivel ${from_tier:,}",
               "", saldo_actual, 0, round(saldo_actual, 2)]
     _append_bet_row(ws_to, values)
 
@@ -235,7 +257,7 @@ def log_movement(gc, tier, nombre, tipo, monto, fecha=None):
     'Deposito'."""
     if tipo not in ("Retiro", "Deposito"):
         raise ValueError("tipo debe ser 'Retiro' o 'Deposito'")
-    fecha = fecha or date.today().isoformat()
+    fecha = fecha or cdmx_today()
 
     sh = _open_tier_sheet(gc, tier)
     ws = _get_or_create_investor_tab(sh, nombre)
@@ -270,7 +292,7 @@ def log_bet(gc, tier, nombre, partido, apuesta, monto, momio, resultado, fecha=N
     acumulado. Regresa la fila agregada (dict, llaves de BET_HEADERS)."""
     if resultado not in ("Gano", "Perdio", "Push"):
         raise ValueError("resultado debe ser 'Gano', 'Perdio' o 'Push'")
-    fecha = fecha or date.today().isoformat()
+    fecha = fecha or cdmx_today()
 
     sh = _open_tier_sheet(gc, tier)
     ws = _get_or_create_investor_tab(sh, nombre)

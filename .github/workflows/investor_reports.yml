@@ -1,0 +1,44 @@
+name: Reportes nocturnos de inversionistas NBA
+
+# Manda el correo diario a TODOS los inversionistas registrados (los 4
+# niveles), cada uno con sus propios movimientos del dia y su saldo -
+# corre solo, todas las noches a las 11:50pm hora de Mexico (CDMX).
+#
+# Se puede disparar de 2 formas:
+#   1. Solo, todos los dias (cron de abajo).
+#   2. A mano desde GitHub: pestana "Actions" -> "Reportes nocturnos de
+#      inversionistas NBA" -> "Run workflow" (util para probar).
+#
+# Mexico City es UTC-6 todo el anio (sin horario de verano desde 2022),
+# asi que 11:50pm CDMX = 05:50 UTC del dia siguiente.
+on:
+  schedule:
+    - cron: "50 5 * * *"  # 23:50 CDMX
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  enviar-reportes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Instalar dependencias
+        run: pip install gspread google-auth
+
+      - name: Escribir credenciales de Google a un archivo temporal
+        run: echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > "$RUNNER_TEMP/google_creds.json"
+
+      - name: Enviar reportes
+        env:
+          GOOGLE_CREDENTIALS_JSON_PATH: ${{ runner.temp }}/google_creds.json
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: python nba_send_investor_reports.py
