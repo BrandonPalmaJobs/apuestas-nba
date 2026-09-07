@@ -7,3 +7,4 @@ numpy
 streamlit==1.61.1
 gspread==6.2.1
 google-auth==2.55.1
+matplotlib

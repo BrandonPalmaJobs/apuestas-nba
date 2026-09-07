@@ -19,9 +19,16 @@ puede probar a mano desde la app (boton "Enviar reporte de hoy (prueba)").
 """
 
 import html
+import io
 import smtplib
+from datetime import datetime
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+import matplotlib
+matplotlib.use("Agg")  # sin pantalla - corre en un servidor (Streamlit Cloud / GitHub Actions)
+import matplotlib.pyplot as plt
 
 import nba_investors as inv
 
@@ -61,8 +68,70 @@ def _stats_generales(gc, tier, nombre):
     return {
         "saldo_actual": saldo_actual, "ganancia_total": ganancia_total,
         "n_ganadas": len(ganadas), "n_perdidas": len(perdidas), "win_rate": win_rate,
-        "total_apostado": total_apostado,
+        "total_apostado": total_apostado, "historial": historial, "apuestas": apuestas,
     }
+
+
+def _parse_fecha(fecha_str):
+    for fmt in ("%Y-%m-%d",):
+        try:
+            return datetime.strptime(fecha_str, fmt)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _render_saldo_chart(historial):
+    """Grafica de linea del saldo a traves del tiempo - misma info que
+    st.line_chart en la pestana de Analisis de la app, como imagen PNG
+    para embeber en el correo (los correos no pueden correr Javascript,
+    asi que una grafica interactiva no funciona aqui)."""
+    puntos = [(f, h["saldo"]) for h in historial if (f := _parse_fecha(h["fecha"]))]
+    if not puntos:
+        return None
+    puntos.sort(key=lambda p: p[0])
+    fechas, saldos = zip(*puntos)
+
+    fig, ax = plt.subplots(figsize=(6, 2.8), dpi=130)
+    ax.plot(fechas, saldos, marker="o", color=NEGRO, linewidth=2)
+    ax.set_title("Saldo a traves del tiempo", fontsize=11, fontweight="bold", loc="left")
+    ax.grid(alpha=0.3)
+    ax.spines[["top", "right"]].set_visible(False)
+    fig.autofmt_xdate(rotation=30)
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+def _render_ganancia_chart(apuestas):
+    """Grafica de barras de ganancia/perdida por apuesta - verde si gano,
+    rojo si perdio, gris si push, misma info que st.bar_chart en la app."""
+    puntos = [(f, h["ganada_perdida"]) for h in apuestas if (f := _parse_fecha(h["fecha"]))]
+    if not puntos:
+        return None
+    puntos.sort(key=lambda p: p[0])
+    fechas, valores = zip(*puntos)
+    colores = [VERDE if v > 0 else ROJO if v < 0 else GRIS_TEXTO for v in valores]
+
+    fig, ax = plt.subplots(figsize=(6, 2.8), dpi=130)
+    ax.bar(range(len(valores)), valores, color=colores)
+    ax.set_title("Ganancia/Perdida por apuesta", fontsize=11, fontweight="bold", loc="left")
+    ax.axhline(0, color="#cccccc", linewidth=1)
+    ax.grid(alpha=0.3, axis="y")
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.set_xticks(range(len(fechas)))
+    ax.set_xticklabels([f.strftime("%m-%d") for f in fechas], rotation=30, ha="right", fontsize=8)
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
 
 
 def build_report_body(nombre, tier, movimientos, saldo_actual):
@@ -100,9 +169,24 @@ def _stat_card(label, value, color=NEGRO):
     )
 
 
-def build_report_html(nombre, tier, fecha, movimientos, stats):
+def build_report_html(nombre, tier, fecha, movimientos, stats, tiene_grafica_saldo=False,
+                       tiene_grafica_ganancia=False):
     ganancia_color = VERDE if stats["ganancia_total"] >= 0 else ROJO
     win_rate_txt = f"{stats['win_rate']:.0f}%" if stats["win_rate"] is not None else "N/D"
+
+    graficas_html = ""
+    if tiene_grafica_saldo:
+        graficas_html += (
+            '<tr><td style="padding:0 20px 10px;">'
+            '<img src="cid:saldo_chart" width="560" style="width:100%;max-width:560px;display:block;'
+            'border-radius:6px;border:1px solid #eee;" alt="Saldo a traves del tiempo"></td></tr>'
+        )
+    if tiene_grafica_ganancia:
+        graficas_html += (
+            '<tr><td style="padding:0 20px 10px;">'
+            '<img src="cid:ganancia_chart" width="560" style="width:100%;max-width:560px;display:block;'
+            'border-radius:6px;border:1px solid #eee;" alt="Ganancia/Perdida por apuesta"></td></tr>'
+        )
 
     filas_mov = ""
     if not movimientos:
@@ -166,6 +250,7 @@ def build_report_html(nombre, tier, fecha, movimientos, stats):
       </table>
     </td>
   </tr>
+  {graficas_html}
   <tr>
     <td style="padding:0 20px 20px;">
       <div style="font-size:14px;font-weight:bold;color:{NEGRO};margin-bottom:8px;">Movimientos de hoy</div>
@@ -194,13 +279,26 @@ def build_report_html(nombre, tier, fecha, movimientos, stats):
 """
 
 
-def send_email(to_email, subject, body_text, body_html, gmail_address, gmail_app_password):
-    msg = MIMEMultipart("alternative")
+def send_email(to_email, subject, body_text, body_html, gmail_address, gmail_app_password, images=None):
+    """images: dict {content_id: bytes_png} - se referencian en el HTML
+    como src="cid:content_id" (imagenes normales por URL no funcionan en
+    la mayoria de los clientes de correo, hay que embeberlas)."""
+    msg = MIMEMultipart("related")
     msg["From"] = gmail_address
     msg["To"] = to_email
     msg["Subject"] = subject
-    msg.attach(MIMEText(body_text, "plain", "utf-8"))
-    msg.attach(MIMEText(body_html, "html", "utf-8"))
+
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(body_text, "plain", "utf-8"))
+    alt.attach(MIMEText(body_html, "html", "utf-8"))
+    msg.attach(alt)
+
+    for cid, img_bytes in (images or {}).items():
+        img = MIMEImage(img_bytes)
+        img.add_header("Content-ID", f"<{cid}>")
+        img.add_header("Content-Disposition", "inline", filename=f"{cid}.png")
+        msg.attach(img)
+
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(gmail_address, gmail_app_password)
         server.sendmail(gmail_address, to_email, msg.as_string())
@@ -214,14 +312,25 @@ def send_daily_report(gc, tier, nombre, correo, gmail_address, gmail_app_passwor
 
     movimientos = inv.get_bets_for_date(gc, tier, nombre, fecha)
     stats = _stats_generales(gc, tier, nombre)
+
+    images = {}
+    saldo_png = _render_saldo_chart(stats["historial"])
+    if saldo_png:
+        images["saldo_chart"] = saldo_png
+    ganancia_png = _render_ganancia_chart(stats["apuestas"])
+    if ganancia_png:
+        images["ganancia_chart"] = ganancia_png
+
     body_text = build_report_body(nombre, tier, movimientos, stats["saldo_actual"])
-    body_html = build_report_html(nombre, tier, fecha, movimientos, stats)
+    body_html = build_report_html(nombre, tier, fecha, movimientos, stats,
+                                   tiene_grafica_saldo=bool(saldo_png),
+                                   tiene_grafica_ganancia=bool(ganancia_png))
     subject = f"Reporte de apuestas - {nombre} - {fecha}"
 
     if not correo:
         return False, f"{nombre} no tiene correo registrado."
     try:
-        send_email(correo, subject, body_text, body_html, gmail_address, gmail_app_password)
+        send_email(correo, subject, body_text, body_html, gmail_address, gmail_app_password, images=images)
         return True, f"Correo enviado a {correo}."
     except Exception as e:
         return False, f"Fallo el envio a {correo}: {e}"
