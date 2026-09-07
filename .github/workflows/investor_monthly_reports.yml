@@ -1,28 +1,28 @@
-name: Reportes nocturnos de inversionistas NBA
+name: Recopilacion mensual de inversionistas NBA
 
-# Manda el correo diario a TODOS los inversionistas registrados (los 4
-# niveles), cada uno con sus propios movimientos del dia y su saldo -
-# corre solo, todas las noches a las 11:50pm hora de Mexico (CDMX).
+# Manda la recopilacion del mes que acaba de terminar a TODOS los
+# inversionistas registrados - corre el dia 1 de cada mes, justo despues
+# de medianoche hora de Mexico (CDMX).
 #
 # Se puede disparar de 2 formas:
-#   1. Solo, todos los dias (cron de abajo).
-#   2. A mano desde GitHub: pestana "Actions" -> "Reportes nocturnos de
+#   1. Solo, el dia 1 de cada mes (cron de abajo).
+#   2. A mano desde GitHub: pestana "Actions" -> "Recopilacion mensual de
 #      inversionistas NBA" -> "Run workflow" (util para probar).
 #
-# Mexico City es UTC-6 todo el anio (sin horario de verano desde 2022),
-# asi que 11:50pm CDMX = 05:50 UTC del dia siguiente.
+# Mexico City es UTC-6 todo el anio (sin horario de verano desde 2022):
+# 06:00 UTC del dia 1 = 00:00 CDMX del dia 1 (justo al empezar el mes).
 on:
   schedule:
-    - cron: "50 5 * * *"  # 23:50 CDMX
+    - cron: "0 6 1 * *"
   workflow_dispatch: {}
 
 permissions:
   contents: read
 
 jobs:
-  enviar-reportes:
+  enviar-reportes-mensuales:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -36,9 +36,9 @@ jobs:
       - name: Escribir credenciales de Google a un archivo temporal
         run: echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > "$RUNNER_TEMP/google_creds.json"
 
-      - name: Enviar reportes
+      - name: Enviar recopilaciones mensuales
         env:
           GOOGLE_CREDENTIALS_JSON_PATH: ${{ runner.temp }}/google_creds.json
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-        run: python nba_send_investor_reports.py
+        run: python nba_send_monthly_reports.py

@@ -75,6 +75,41 @@ def _stats_generales(gc, tier, nombre):
     }
 
 
+MESES_ES = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto",
+            "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+
+
+def _movimientos_del_mes(historial, year, month):
+    prefijo = f"{year:04d}-{month:02d}"
+    return [h for h in historial if (h["fecha"] or "").startswith(prefijo)]
+
+
+def _stats_del_mes(historial, tier, year, month):
+    """Estadisticas ACOTADAS al mes (a diferencia de _stats_generales, que
+    es todo el historial): saldo al inicio/fin de mes, ganancia del mes,
+    record y efectividad SOLO de ese mes."""
+    prefijo = f"{year:04d}-{month:02d}"
+    del_mes = _movimientos_del_mes(historial, year, month)
+    antes_del_mes = [h for h in historial if (h["fecha"] or "") < prefijo]
+
+    saldo_inicio = antes_del_mes[-1]["saldo"] if antes_del_mes else float(tier)
+    saldo_fin = del_mes[-1]["saldo"] if del_mes else saldo_inicio
+    saldo_actual = historial[-1]["saldo"] if historial else float(tier)
+
+    apuestas_mes = [h for h in del_mes if h["apuesta"] not in ("Retiro", "Deposito")]
+    ganadas = [h for h in apuestas_mes if h["ganada_perdida"] > 0]
+    perdidas = [h for h in apuestas_mes if h["ganada_perdida"] < 0]
+    total_apostado = sum(h["monto"] for h in apuestas_mes)
+    win_rate = (len(ganadas) / len(apuestas_mes) * 100) if apuestas_mes else None
+
+    return {
+        "saldo_actual": saldo_actual, "saldo_inicio": saldo_inicio, "saldo_fin": saldo_fin,
+        "ganancia_total": saldo_fin - saldo_inicio,
+        "n_ganadas": len(ganadas), "n_perdidas": len(perdidas), "win_rate": win_rate,
+        "total_apostado": total_apostado, "historial": del_mes, "apuestas": apuestas_mes,
+    }
+
+
 def _parse_fecha(fecha_str):
     for fmt in ("%Y-%m-%d",):
         try:
@@ -137,12 +172,13 @@ def _render_ganancia_chart(apuestas):
     return buf.read()
 
 
-def build_report_body(nombre, tier, movimientos, saldo_actual):
+def build_report_body(nombre, tier, movimientos, saldo_actual, periodo_label="hoy",
+                       mensaje_vacio="No se registro ningun movimiento hoy."):
     """Version en texto plano (respaldo para clientes de correo que no
     muestran HTML)."""
-    lines = [f"Hola {nombre},", "", f"Resumen de hoy - nivel ${tier:,}:", ""]
+    lines = [f"Hola {nombre},", "", f"Resumen de {periodo_label} - nivel ${tier:,}:", ""]
     if not movimientos:
-        lines.append("No se registro ningun movimiento hoy.")
+        lines.append(mensaje_vacio)
     else:
         for m in movimientos:
             apuesta = m.get("Apuesta que se realizo", "")
@@ -172,8 +208,10 @@ def _stat_card(label, value, color=NEGRO):
     )
 
 
-def build_report_html(nombre, tier, fecha, movimientos, stats, tiene_grafica_saldo=False,
-                       tiene_grafica_ganancia=False):
+def build_report_html(nombre, tier, periodo, movimientos, stats, tiene_grafica_saldo=False,
+                       tiene_grafica_ganancia=False, titulo_movimientos="Movimientos de hoy",
+                       mensaje_vacio="No se registro ningun movimiento hoy.",
+                       etiqueta_ganancia="Ganancia/Perdida"):
     ganancia_color = VERDE if stats["ganancia_total"] >= 0 else ROJO
     win_rate_txt = f"{stats['win_rate']:.0f}%" if stats["win_rate"] is not None else "N/D"
 
@@ -195,7 +233,7 @@ def build_report_html(nombre, tier, fecha, movimientos, stats, tiene_grafica_sal
     if not movimientos:
         filas_mov = (
             '<tr><td colspan="5" style="padding:16px;text-align:center;color:'
-            f'{GRIS_TEXTO};">No se registro ningun movimiento hoy.</td></tr>'
+            f'{GRIS_TEXTO};">{html.escape(mensaje_vacio)}</td></tr>'
         )
     else:
         for m in movimientos:
@@ -236,7 +274,7 @@ def build_report_html(nombre, tier, fecha, movimientos, stats, tiene_grafica_sal
   <tr>
     <td style="background:{NEGRO};color:{BLANCO};padding:24px;text-align:center;">
       <div style="font-size:20px;font-weight:bold;">🏀 Reporte de Apuestas NBA</div>
-      <div style="font-size:14px;opacity:0.75;margin-top:4px;">{html.escape(nombre)} &middot; nivel ${tier:,} &middot; {fecha}</div>
+      <div style="font-size:14px;opacity:0.75;margin-top:4px;">{html.escape(nombre)} &middot; nivel ${tier:,} &middot; {html.escape(periodo)}</div>
     </td>
   </tr>
   <tr>
@@ -244,7 +282,7 @@ def build_report_html(nombre, tier, fecha, movimientos, stats, tiene_grafica_sal
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
         <tr>
           {_stat_card("Saldo actual", f"${stats['saldo_actual']:,.2f}")}
-          {_stat_card("Ganancia/Perdida", f"${stats['ganancia_total']:,.2f}", ganancia_color)}
+          {_stat_card(etiqueta_ganancia, f"${stats['ganancia_total']:,.2f}", ganancia_color)}
         </tr>
         <tr>
           {_stat_card("Record (G-P)", f"{stats['n_ganadas']}-{stats['n_perdidas']}")}
@@ -256,7 +294,7 @@ def build_report_html(nombre, tier, fecha, movimientos, stats, tiene_grafica_sal
   {graficas_html}
   <tr>
     <td style="padding:0 20px 20px;">
-      <div style="font-size:14px;font-weight:bold;color:{NEGRO};margin-bottom:8px;">Movimientos de hoy</div>
+      <div style="font-size:14px;font-weight:bold;color:{NEGRO};margin-bottom:8px;">{html.escape(titulo_movimientos)}</div>
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
         <tr style="background:{NEGRO};color:{BLANCO};">
           <th style="padding:10px;text-align:left;font-size:12px;">Partido</th>
@@ -356,3 +394,59 @@ def send_daily_report(gc, tier, nombre, correo, gmail_address, gmail_app_passwor
         return True, f"Correo enviado a {correo}."
     except Exception as e:
         return False, f"Fallo el envio a {correo}: {e}"
+
+
+def send_monthly_report(gc, tier, nombre, correo, gmail_address, gmail_app_password, year=None, month=None):
+    """Arma y manda la recopilacion mensual de un inversionista: todos
+    los movimientos de `month`/`year` (default el mes que acaba de
+    terminar, hora CDMX), saldo al inicio/fin de ese mes, y record de
+    efectividad SOLO de ese mes. Regresa (enviado: bool, mensaje: str)."""
+    if year is None or month is None:
+        hoy = inv.cdmx_today()
+        anio_hoy, mes_hoy, _ = (int(x) for x in hoy.split("-"))
+        if mes_hoy == 1:
+            year, month = anio_hoy - 1, 12
+        else:
+            year, month = anio_hoy, mes_hoy - 1
+
+    nombre_mes = MESES_ES[month]
+    periodo_label = f"{nombre_mes} {year}"
+
+    historial_completo = inv.get_full_history(gc, tier, nombre)
+    stats = _stats_del_mes(historial_completo, tier, year, month)
+    movimientos = [
+        {
+            "Partido al que se aposto": h["partido"], "Fecha en la que se aposto": h["fecha"],
+            "Apuesta que se realizo": h["apuesta"], "Momio en la que se tomo": h["momio"],
+            "Inversion actual": h["monto"], "Ganada / Perdida": h["ganada_perdida"],
+            "Inversion despues de apuesta": h["saldo"],
+        }
+        for h in stats["historial"]
+    ]
+
+    images = {}
+    saldo_png = _render_saldo_chart(stats["historial"])
+    if saldo_png:
+        images["saldo_chart"] = saldo_png
+    ganancia_png = _render_ganancia_chart(stats["apuestas"])
+    if ganancia_png:
+        images["ganancia_chart"] = ganancia_png
+
+    body_text = build_report_body(
+        nombre, tier, movimientos, stats["saldo_actual"], periodo_label=nombre_mes.lower(),
+        mensaje_vacio=f"No se registraron movimientos en {nombre_mes} {year}.")
+    body_html = build_report_html(
+        nombre, tier, periodo_label, movimientos, stats,
+        tiene_grafica_saldo=bool(saldo_png), tiene_grafica_ganancia=bool(ganancia_png),
+        titulo_movimientos=f"Movimientos de {nombre_mes} {year}",
+        mensaje_vacio=f"No se registraron movimientos en {nombre_mes} {year}.",
+        etiqueta_ganancia=f"Ganancia/Perdida ({nombre_mes})")
+    subject = f"Recopilacion mensual - {nombre} - {nombre_mes} {year}"
+
+    if not correo:
+        return False, f"{nombre} no tiene correo registrado."
+    try:
+        send_email(correo, subject, body_text, body_html, gmail_address, gmail_app_password, images=images)
+        return True, f"Correo mensual enviado a {correo}."
+    except Exception as e:
+        return False, f"Fallo el envio mensual a {correo}: {e}"

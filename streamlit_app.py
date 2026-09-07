@@ -904,6 +904,17 @@ def render_inversionistas():
                     )
                     (st.success if ok else st.error)(msg)
 
+                if st.button("Enviar recopilacion MENSUAL ahora (mes en curso)", disabled=not datos_c["correo"]):
+                    ok, msg = ie.send_monthly_report(
+                        gc, tier_c, inversionista_c, datos_c["correo"],
+                        st.secrets["GMAIL_ADDRESS"], st.secrets["GMAIL_APP_PASSWORD"],
+                        year=int(inv.cdmx_today()[:4]), month=int(inv.cdmx_today()[5:7]),
+                    )
+                    (st.success if ok else st.error)(msg)
+                    st.caption("Nota: la corrida automatica del dia 1 manda el mes que ACABA DE TERMINAR - "
+                               "esta prueba manda el mes EN CURSO (los datos que ya haya hasta hoy), para "
+                               "poder ver el formato sin esperar a fin de mes.")
+
             st.divider()
             st.caption(f"O manda el reporte de hoy a TODOS los inversionistas del nivel ${tier_c:,} de una vez "
                        f"(uno por uno, cada quien con su propia informacion).")
