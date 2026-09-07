@@ -1,0 +1,7 @@
+requests
+pandas
+pdfplumber
+scikit-learn
+joblib
+numpy
+streamlit==1.61.1

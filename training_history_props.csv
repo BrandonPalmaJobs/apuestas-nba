@@ -1,0 +1,2 @@
+timestamp,n_rows,n_players,modelo_points,mae_points,mae_points_baseline,modelo_rebounds,mae_rebounds,mae_rebounds_baseline,modelo_assists,mae_assists,mae_assists_baseline
+2026-09-04T18:14:51,10325,322,Regresion lineal,5.5016,5.602,Regresion lineal,2.1407,2.1518,Gradient Boosting,1.7256,1.7384

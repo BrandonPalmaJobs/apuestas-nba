@@ -1,0 +1,17 @@
+[
+  {
+    "modelo": "Baseline (promedio movil propio)",
+    "mae": 5.602,
+    "rmse": 7.1827
+  },
+  {
+    "modelo": "Regresion lineal",
+    "mae": 5.5016,
+    "rmse": 7.0512
+  },
+  {
+    "modelo": "Gradient Boosting",
+    "mae": 5.5869,
+    "rmse": 7.1335
+  }
+]

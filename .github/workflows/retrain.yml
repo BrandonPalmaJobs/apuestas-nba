@@ -1,0 +1,79 @@
+name: Reentrenar modelos NBA
+
+# Corre el reentrenamiento completo (nba_retrain_pipeline.py) en un servidor
+# de GitHub en vez de en el navegador/Streamlit Cloud - no depende de que
+# una pestana se quede conectada horas, y tiene mucha mas RAM disponible.
+#
+# Se puede disparar de 3 formas:
+#   1. Solo, todos los dias (cron de abajo) - pero nba_retrain_pipeline.py
+#      se auto-frena y no hace nada si el ultimo reentrenamiento fue hace
+#      menos de 3 dias (--min-days-between, default 3), asi que en la
+#      practica reentrena cada ~3 dias como se quiere.
+#   2. A mano desde GitHub: pestana "Actions" -> "Reentrenar modelos NBA" ->
+#      "Run workflow".
+#   3. A mano desde la terminal: gh workflow run retrain.yml
+#
+# Por que diario y no "cron cada 3 dias" directo: la sintaxis obvia
+# ("0 9 */3 * *") NO significa "cada 3 dias desde hoy" - en el campo de
+# dia-del-mes de cron, */3 se cuenta desde el dia 1 del mes, lo cual ademas
+# se corta feo en el cambio de mes. Ademas, GitHub retrasa o de plano SALTA
+# corridas programadas sin avisar durante picos de carga - con un disparo
+# cada 3 dias exacto, un solo salto deja el modelo desactualizado varios
+# dias de mas sin que nadie se de cuenta. Con un disparo diario + el freno
+# de --min-days-between, el peor caso de un salto es reentrenar un dia
+# tarde, no varios (mismo arreglo ya aplicado en apuestas_mlb/retrain.yml).
+#
+# Por que timeout tan largo (350 min): la PRIMERA vez que esto corre sin el
+# cache/game_summaries.json ya poblado, recolectar la liga completa (equipo
+# + props de jugador) puede tardar 3+ horas (ESPN se pacea a proposito para
+# no disparar su limite de solicitudes). Con el cache ya subido al repo (se
+# sube junto con los modelos, ver "Guardar..." abajo), las corridas
+# siguientes son mucho mas rapidas: solo se piden los juegos NUEVOS desde
+# la ultima vez.
+on:
+  schedule:
+    - cron: "0 9 * * *"  # 09:00 UTC (~03:00 hora de Mexico) todos los dias
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  reentrenar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Reentrenar (recolecta equipo + props, entrena los 6 modelos)
+        run: python nba_retrain_pipeline.py
+
+      - name: Guardar modelos, datos y cache actualizados en el repo
+        run: |
+          git config user.name "NBA Apuestas Bot"
+          git config user.email "nba-apuestas-bot@users.noreply.github.com"
+          # predictions_log_nba.csv NO se sube desde aqui: la app en
+          # Streamlit Cloud tambien lo modifica (cada prediccion que
+          # alguien pide) y puede pasar al mismo tiempo que este workflow
+          # corre - dos escrituras reales al mismo archivo causan un
+          # conflicto de contenido que un rebase no puede resolver solo
+          # (mismo problema ya visto en apuestas_mlb).
+          git checkout -- predictions_log_nba.csv 2>/dev/null || true
+          git add model_nba_*.joblib* model_props_*.joblib* \
+                  training_data_nba.csv training_data_props.csv \
+                  training_history_nba.csv training_history_props.csv \
+                  cache/game_summaries.json
+          git diff --cached --quiet || git commit -m "Reentrenamiento automatico (GitHub Actions) $(date -u +%Y-%m-%d)"
+          # Si alguien mas subio un commit mientras esto corria (horas), un
+          # push directo se rechaza (non-fast-forward). Rebase encima de lo
+          # mas reciente antes de subir - ya no deberia haber conflicto de
+          # contenido real, los demas archivos solo los toca este job.
+          git pull --rebase origin main
+          git push
