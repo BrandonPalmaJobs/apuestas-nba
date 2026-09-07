@@ -601,9 +601,9 @@ def render_inversionistas():
         st.error(f"No se pudo conectar a Google Sheets: {e}")
         return
 
-    tab_apuesta, tab_mov, tab_alta, tab_editar, tab_nivel, tab_ver, tab_correo = st.tabs([
+    tab_apuesta, tab_mov, tab_alta, tab_editar, tab_nivel, tab_ver, tab_analisis, tab_correo = st.tabs([
         "Registrar apuesta", "Retiro / Deposito", "Agregar inversionista",
-        "Editar / Eliminar", "Cambiar de nivel", "Ver inversionistas", "Enviar correo (prueba)",
+        "Editar / Eliminar", "Cambiar de nivel", "Ver inversionistas", "📊 Analisis", "Enviar correo (prueba)",
     ])
 
     with tab_alta:
@@ -768,6 +768,69 @@ def render_inversionistas():
             ganancia = saldo - tier3
             delta_txt = f"{'+' if ganancia >= 0 else ''}{ganancia:,.2f} desde el inicio"
             st.metric(i["nombre"], f"${saldo:,.2f}", delta=delta_txt)
+
+    with tab_analisis:
+        st.caption("Grafica de saldo a traves del tiempo, historial completo y estadisticas "
+                   "(efectividad, total apostado) de un inversionista especifico.")
+        tier_x = st.selectbox("Nivel", list(inv.TIER_SHEET_NAMES.keys()),
+                               format_func=lambda x: f"${x:,}", key="analisis_tier")
+        try:
+            investors_x = inv.list_investors(gc, tier_x)
+        except Exception as e:
+            investors_x = []
+            st.error(f"No se pudo leer el Sheet de ${tier_x:,}: {e}")
+        nombres_x = [i["nombre"] for i in investors_x]
+        if not nombres_x:
+            st.info("Sin inversionistas registrados en este nivel todavia.")
+        else:
+            inversionista_x = st.selectbox("Inversionista", nombres_x, key="analisis_inv")
+            try:
+                historial = inv.get_full_history(gc, tier_x, inversionista_x)
+                saldo_actual = inv.get_investor_balance(gc, tier_x, inversionista_x)
+            except Exception as e:
+                historial = []
+                saldo_actual = tier_x
+                st.error(f"No se pudo leer el historial: {e}")
+
+            ganancia_total = saldo_actual - tier_x
+            apuestas = [h for h in historial if h["apuesta"] not in ("Retiro", "Deposito")]
+            ganadas = [h for h in apuestas if h["ganada_perdida"] > 0]
+            perdidas = [h for h in apuestas if h["ganada_perdida"] < 0]
+            total_apostado = sum(h["monto"] for h in apuestas)
+            win_rate = (len(ganadas) / len(apuestas) * 100) if apuestas else None
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Saldo actual", f"${saldo_actual:,.2f}")
+            c2.metric("Ganancia/Perdida total", f"${ganancia_total:,.2f}",
+                      delta=f"{ganancia_total / tier_x * 100:+.1f}%")
+            c3.metric("Apuestas (G-P)", f"{len(ganadas)}-{len(perdidas)}",
+                      delta=f"{win_rate:.0f}% efectividad" if win_rate is not None else None)
+            c4.metric("Total apostado", f"${total_apostado:,.2f}")
+
+            if historial:
+                df_hist = pd.DataFrame(historial)
+                df_hist["fecha_dt"] = pd.to_datetime(df_hist["fecha"], errors="coerce")
+                df_chart = df_hist.dropna(subset=["fecha_dt"]).sort_values("fecha_dt")
+
+                if not df_chart.empty:
+                    st.subheader("Saldo a traves del tiempo")
+                    st.line_chart(df_chart.set_index("fecha_dt")["saldo"])
+
+                if apuestas:
+                    df_apuestas = pd.DataFrame(apuestas)
+                    df_apuestas["fecha_dt"] = pd.to_datetime(df_apuestas["fecha"], errors="coerce")
+                    df_apuestas = df_apuestas.dropna(subset=["fecha_dt"]).sort_values("fecha_dt")
+                    if not df_apuestas.empty:
+                        st.subheader("Ganancia/Perdida por apuesta")
+                        st.bar_chart(df_apuestas.set_index("fecha_dt")["ganada_perdida"])
+
+                st.subheader("Historial completo")
+                st.dataframe(
+                    df_hist[["fecha", "partido", "apuesta", "momio", "monto", "ganada_perdida", "saldo"]],
+                    hide_index=True, use_container_width=True,
+                )
+            else:
+                st.info("Sin movimientos registrados todavia para este inversionista.")
 
     with tab_correo:
         st.caption("Manda ahora mismo (sin esperar a las 11:50pm) el reporte del dia de hoy a un "

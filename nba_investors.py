@@ -307,6 +307,33 @@ def log_bet(gc, tier, nombre, partido, apuesta, monto, momio, resultado, fecha=N
     return dict(zip(BET_HEADERS, values))
 
 
+def get_full_history(gc, tier, nombre):
+    """Historial COMPLETO de un inversionista (apuestas + retiros/
+    depositos), con los numeros ya convertidos a float (no texto con
+    coma decimal) - pensado para graficas y analisis, no para escribir
+    de vuelta al Sheet."""
+    sh = _open_tier_sheet(gc, tier)
+    ws = _get_or_create_investor_tab(sh, nombre)
+    out = []
+    for r in _read_bet_rows(ws):
+        try:
+            monto = _parse_number(r["Inversion actual"])
+            ganada_perdida = _parse_number(r["Ganada / Perdida"])
+            saldo = _parse_number(r["Inversion despues de apuesta"])
+        except (ValueError, KeyError):
+            continue
+        out.append({
+            "fecha": r.get("Fecha en la que se aposto"),
+            "partido": r.get("Partido al que se aposto"),
+            "apuesta": r.get("Apuesta que se realizo"),
+            "momio": r.get("Momio en la que se tomo"),
+            "monto": monto,
+            "ganada_perdida": ganada_perdida,
+            "saldo": saldo,
+        })
+    return out
+
+
 def get_bets_for_date(gc, tier, nombre, fecha):
     """Todas las apuestas de un inversionista logueadas en `fecha`
     (YYYY-MM-DD) - para el reporte por correo."""
