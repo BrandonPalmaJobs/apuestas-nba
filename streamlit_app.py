@@ -634,7 +634,11 @@ def render_inversionistas():
                 investors = []
                 st.error(f"No se pudo leer el Sheet de ${tier2:,}: {e}")
             nombres = [i["nombre"] for i in investors]
-            inversionista = st.selectbox("Inversionista", nombres) if nombres else None
+            aplicar_a_todos = st.checkbox(
+                f"Registrar esta misma apuesta para TODOS los inversionistas del nivel "
+                f"(actualmente {len(nombres)})")
+            inversionista = st.selectbox("Inversionista", nombres, disabled=aplicar_a_todos) \
+                if nombres else None
             partido = st.text_input("Partido al que se aposto (ej. 'Lakers vs Celtics')")
             apuesta = st.text_input("Apuesta que se realizo (ej. 'Lakers -4.5' o 'Over 220.5')")
             c1, c2 = st.columns(2)
@@ -643,17 +647,21 @@ def render_inversionistas():
             resultado = st.radio("Resultado", ["Gano", "Perdio", "Push"], horizontal=True)
             submitted2 = st.form_submit_button("Registrar apuesta", type="primary", disabled=not nombres)
         if submitted2:
-            if not inversionista or not partido or not apuesta or momio == 0:
-                st.error("Completa inversionista, partido, apuesta y un momio distinto de 0.")
+            if not partido or not apuesta or momio == 0:
+                st.error("Completa partido, apuesta y un momio distinto de 0.")
+            elif not aplicar_a_todos and not inversionista:
+                st.error("Selecciona un inversionista, o marca la casilla de aplicar a todos.")
             else:
-                try:
-                    row = inv.log_bet(gc, tier2, inversionista, partido, apuesta, monto, int(momio), resultado)
-                    ganancia = row["Ganada / Perdida"]
-                    signo = "+" if ganancia >= 0 else ""
-                    st.success(f"Registrado: {inversionista} {resultado} {signo}{ganancia:.2f} - "
-                               f"saldo nuevo: ${row['Inversion despues de apuesta']:,.2f}")
-                except Exception as e:
-                    st.error(str(e))
+                objetivo = nombres if aplicar_a_todos else [inversionista]
+                for nom in objetivo:
+                    try:
+                        row = inv.log_bet(gc, tier2, nom, partido, apuesta, monto, int(momio), resultado)
+                        ganancia = row["Ganada / Perdida"]
+                        signo = "+" if ganancia >= 0 else ""
+                        st.success(f"{nom}: {resultado} {signo}{ganancia:.2f} - "
+                                   f"saldo nuevo: ${row['Inversion despues de apuesta']:,.2f}")
+                    except Exception as e:
+                        st.error(f"{nom}: {e}")
 
     with tab_mov:
         st.caption("Retiro o deposito de fondos FUERA de una apuesta (ej. el inversionista retira "
