@@ -3,10 +3,14 @@ Manda la RECOPILACION MENSUAL a todos los inversionistas registrados (los
 4 niveles): todos los movimientos del mes que acaba de terminar, saldo al
 inicio/fin de ese mes, y su record/efectividad de ese mes.
 
-Pensado para correr el dia 1 de cada mes, justo despues de medianoche
-hora CDMX, via GitHub Actions (ver
-.github/workflows/investor_monthly_reports.yml) - tambien se puede
-correr a mano.
+Lee el historial de TODOS los inversionistas de un nivel en UNA sola
+llamada a la API (send_monthly_reports_batch) en vez de una llamada por
+persona - pensado para escalar a ~100 usuarios sin agotar la cuota de
+Google Sheets.
+
+Pensado para correr el dia 1 de cada mes a las 6:00am hora CDMX, via
+GitHub Actions (ver .github/workflows/investor_monthly_reports.yml) -
+tambien se puede correr a mano.
 
 Uso:
     python nba_send_monthly_reports.py
@@ -14,15 +18,9 @@ Uso:
 
 import os
 import sys
-import time
 
 import nba_investor_emails as ie
 import nba_investors as inv
-
-# Ver PAUSA_ENTRE_INVERSIONISTAS en nba_send_investor_reports.py - mismo
-# motivo (no rafaguear el limite de solicitudes por minuto de Google al
-# escalar a ~100 usuarios).
-PAUSA_ENTRE_INVERSIONISTAS = 1.0
 
 
 def main():
@@ -44,19 +42,28 @@ def main():
         except Exception as e:
             print(f"Nivel ${tier:,}: ERROR leyendo el Sheet - {e}", file=sys.stderr)
             continue
-        print(f"\nNivel ${tier:,}: {len(investors)} inversionista(s)")
-        for i in investors:
-            if not i["correo"]:
-                print(f"  [omitido] {i['nombre']}: sin correo registrado")
-                total_sin_correo += 1
-                continue
-            ok, msg = ie.send_monthly_report(gc, tier, i["nombre"], i["correo"], gmail_address, gmail_app_password)
-            print(f"  {i['nombre']}: {msg}")
+
+        con_correo = [i for i in investors if i["correo"]]
+        sin_correo = [i for i in investors if not i["correo"]]
+        for i in sin_correo:
+            print(f"  [omitido] {i['nombre']}: sin correo registrado")
+        total_sin_correo += len(sin_correo)
+
+        print(f"\nNivel ${tier:,}: {len(con_correo)} inversionista(s) con correo")
+        if not con_correo:
+            continue
+        try:
+            resultados = ie.send_monthly_reports_batch(gc, tier, con_correo, gmail_address, gmail_app_password)
+        except Exception as e:
+            print(f"  ERROR leyendo el historial en lote de este nivel: {e}", file=sys.stderr)
+            total_fail += len(con_correo)
+            continue
+        for nombre, ok, msg in resultados:
+            print(f"  {nombre}: {msg}")
             if ok:
                 total_ok += 1
             else:
                 total_fail += 1
-            time.sleep(PAUSA_ENTRE_INVERSIONISTAS)
 
     print(f"\nListo: {total_ok} enviados, {total_fail} fallidos, {total_sin_correo} sin correo registrado.")
     if total_fail:
