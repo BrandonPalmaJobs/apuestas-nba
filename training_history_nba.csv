@@ -1,2 +1,4 @@
 timestamp,n_rows,modelo_total,mae_total,mae_total_baseline,modelo_margin,mae_margin,mae_margin_baseline,modelo_win,brier_win,brier_win_baseline
 2026-09-04T02:20:05,1156,Regresion lineal,15.3516,15.4129,Regresion lineal,12.4334,12.9567,Regresion logistica,0.1825,0.1908
+2026-09-07T08:45:58,1156,Regresion lineal,15.3061,15.4129,Regresion lineal,12.4266,12.9567,Regresion logistica,0.1833,0.1908
+2026-09-07T08:46:13,1156,Regresion lineal,15.3061,15.4129,Regresion lineal,12.4266,12.9567,Regresion logistica,0.1833,0.1908

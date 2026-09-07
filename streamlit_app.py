@@ -35,6 +35,7 @@ import nba_data as n
 import nba_investor_emails as ie
 import nba_investors as inv
 import nba_props_predict as pp
+import nba_props_track as pt
 import nba_report as r
 import nba_track as track
 
@@ -233,6 +234,8 @@ def build_full_report_nba(equipo_a, equipo_b, season, last_n, lesionado_a, lesio
         ml_row["away_days_rest"] = rep_away.get("days_rest")
         ml_row["home_b2b"] = int(bool(rep_home.get("is_b2b")))
         ml_row["away_b2b"] = int(bool(rep_away.get("is_b2b")))
+        ml_row["home_missing_regulars"] = rep_home.get("missing_regulars")
+        ml_row["away_missing_regulars"] = rep_away.get("missing_regulars")
 
     return {
         "team_a": team_a, "team_b": team_b, "team_home": team_home, "team_away": team_away,
@@ -365,6 +368,8 @@ def render_props_tab():
                                   key="props_season")
         window = c4.number_input("Ventana movil (juegos)", value=pp.WINDOW, step=1, min_value=3,
                                   key="props_window")
+        st.session_state["props_log_this"] = st.checkbox(
+            "Guardar esta prediccion en el historial de seguimiento (solo si hay juego real)", value=True)
         submitted = st.form_submit_button("Predecir", type="primary", use_container_width=True)
 
     if not submitted:
@@ -385,11 +390,17 @@ def render_props_tab():
         st.warning("Todavia no hay modelos de props entrenados - ve a 'Reentrenar modelos'.")
         return
 
+    try:
+        matchup = n.find_next_matchup(team, opponent)
+    except Exception:
+        matchup = None
+    as_of_date = matchup["date"] if matchup else None
+
     with st.spinner(f"Calculando historial reciente de {player_name}..."):
         try:
             recent = pp.player_recent_games(team["espn_id"], player_id, int(season), window=int(window))
-            rep_team = r.team_side_report(team, opponent, int(season), int(window))
-            rep_opp = r.team_side_report(opponent, team, int(season), int(window))
+            rep_team = r.team_side_report(team, opponent, int(season), int(window), as_of_date=as_of_date)
+            rep_opp = r.team_side_report(opponent, team, int(season), int(window), as_of_date=as_of_date)
         finally:
             n.flush_cache()
 
@@ -407,13 +418,18 @@ def render_props_tab():
         "avg_minutes": r._avg([g["minutes"] for g in recent]),
         "team_off_rtg": rep_team["advanced"]["off_rtg"], "team_pace": rep_team["advanced"]["pace"],
         "opp_def_rtg": rep_opp["advanced"]["def_rtg"], "opp_pace": rep_opp["advanced"]["pace"],
+        "days_rest": rep_team.get("days_rest"), "b2b": int(bool(rep_team.get("is_b2b"))),
     }
 
     st.subheader(f"{player_name} ({team['full_name']}) vs {opponent['full_name']}")
     game_summaries = [f"{g['points']:.0f}p/{g['rebounds']:.0f}r/{g['assists']:.0f}a" for g in recent]
     st.caption(f"Ultimos {len(recent)} juegos: " + ", ".join(game_summaries))
+    if rep_team.get("days_rest") is not None:
+        alerta = " ⚠️ BACK-TO-BACK" if rep_team.get("is_b2b") else ""
+        st.caption(f"Descanso del equipo: {rep_team['days_rest']} dia(s){alerta}")
 
     cols = st.columns(3)
+    preds = {}
     for col, stat, bundle, label in [
         (cols[0], "points", bundle_points, "Puntos"),
         (cols[1], "rebounds", bundle_rebounds, "Rebotes"),
@@ -427,6 +443,21 @@ def render_props_tab():
             st.metric(f"{label} ({bundle['model_name']})", num(predicho),
                       delta=f"{predicho - row[f'avg_{stat}']:+.1f} vs. promedio propio")
             st.caption(f"Mediana ultimos {len(recent)}: {mediana:.1f} → {over_under}")
+        preds[stat] = {"pred": predicho, "model_name": bundle["model_name"], "baseline": row[f"avg_{stat}"]}
+
+    if matchup and st.session_state.get("props_log_this", True):
+        pt.log_prediction(pt.build_log_row(
+            event_id=matchup["event_id"], game_date=matchup["date"],
+            player_id=player_id, player_name=player_name,
+            team=team["full_name"], team_espn_id=team["espn_id"], opponent=opponent["full_name"],
+            pred_points=preds["points"]["pred"], model_points=preds["points"]["model_name"],
+            baseline_points=preds["points"]["baseline"],
+            pred_rebounds=preds["rebounds"]["pred"], model_rebounds=preds["rebounds"]["model_name"],
+            baseline_rebounds=preds["rebounds"]["baseline"],
+            pred_assists=preds["assists"]["pred"], model_assists=preds["assists"]["model_name"],
+            baseline_assists=preds["assists"]["baseline"],
+        ))
+        st.caption("Prediccion guardada en props_predictions_log.csv para evaluar despues del juego.")
 
     st.caption("NOTA: sin linea real de casa de apuestas - la 'mediana reciente' es un umbral "
                "calculado de los propios datos del jugador. Ajusta con la linea real que te ofrezca "
@@ -458,6 +489,29 @@ def render_evaluar():
         st.dataframe(pd.read_csv(log_path).tail(30), hide_index=True, use_container_width=True)
     else:
         st.info("Todavia no hay predicciones guardadas - genera un reporte con un juego real primero.")
+
+    st.divider()
+    st.header("📈 Evaluar props (jugador) vs. resultado real")
+    st.caption("Mismo seguimiento, pero para las predicciones de puntos/rebotes/asistencias de jugador.")
+
+    props_log_path = os.path.join(APP_DIR, "props_predictions_log.csv")
+
+    if st.button("Evaluar props ahora", type="primary"):
+        placeholder = st.empty()
+        with live_log(placeholder):
+            pt.evaluate_log(props_log_path)
+            n.flush_cache()
+        ok, msg = git_sync.commit_and_push(
+            ["props_predictions_log.csv"], f"Evalua predicciones de props {date.today().isoformat()}",
+            st.secrets, APP_DIR,
+        )
+        (st.success if ok else st.warning)(msg)
+
+    if os.path.exists(props_log_path):
+        st.subheader("Historial de predicciones de props")
+        st.dataframe(pd.read_csv(props_log_path).tail(30), hide_index=True, use_container_width=True)
+    else:
+        st.info("Todavia no hay predicciones de props guardadas - genera una en la pestana Props primero.")
 
 
 # ---------------------------------------------------------------------------

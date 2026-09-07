@@ -353,11 +353,21 @@ def team_side_report(team, opponent, season, last_n, lesionado_override=None, as
         except Exception as e:
             print(f"    (no se pudo calcular impacto de lesionado: {e})", file=sys.stderr)
 
+    # Cuantos de los 5 titulares habituales (mismo criterio de probable_lineup)
+    # estan ausentes AHORA por lesion - se reusa "excluidos_por_lesion" en vez
+    # de calcular esto por separado. Es la version EN VIVO del feature
+    # "home_missing_regulars"/"away_missing_regulars" que entrena
+    # nba_train_data.py (ahi se mide retrospectivamente quien de la rotacion
+    # habitual NO jugo en cada juego historico, en vez de depender de un
+    # reporte de lesionados dia-por-dia que no existe publicamente).
+    missing_regulars = len(lineup_probable["excluidos_por_lesion"]) if lineup_probable else None
+
     return {
         "team": team, "opponent": opponent, "advanced": advanced,
         "quarter_profile": quarter_profile, "n_games": len(per_game),
         "injuries_auto": injuries_auto, "lineup_probable": lineup_probable,
         "days_rest": days_rest, "is_b2b": is_b2b, "injury_impact": injury_impact,
+        "missing_regulars": missing_regulars,
     }
 
 

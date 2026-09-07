@@ -18,6 +18,7 @@ import joblib
 import pandas as pd
 
 import nba_data as n
+import nba_props_track as pt
 import nba_report as r
 
 WINDOW = 10
@@ -78,9 +79,15 @@ def main():
     print(f"Jugador: {player_name} ({team['full_name']}) vs {opponent['full_name']}\n")
 
     try:
+        matchup = n.find_next_matchup(team, opponent)
+    except Exception:
+        matchup = None
+    as_of_date = matchup["date"] if matchup else None
+
+    try:
         recent = player_recent_games(team["espn_id"], player_id, season, window=args.window)
-        rep_team = r.team_side_report(team, opponent, season, args.window)
-        rep_opp = r.team_side_report(opponent, team, season, args.window)
+        rep_team = r.team_side_report(team, opponent, season, args.window, as_of_date=as_of_date)
+        rep_opp = r.team_side_report(opponent, team, season, args.window, as_of_date=as_of_date)
     finally:
         n.flush_cache()
 
@@ -100,6 +107,8 @@ def main():
         "team_pace": rep_team["advanced"]["pace"],
         "opp_def_rtg": rep_opp["advanced"]["def_rtg"],
         "opp_pace": rep_opp["advanced"]["pace"],
+        "days_rest": rep_team.get("days_rest"),
+        "b2b": int(bool(rep_team.get("is_b2b"))),
     }
 
     game_summaries = [f"{g['points']:.0f}p/{g['rebounds']:.0f}r/{g['assists']:.0f}a" for g in recent]
@@ -108,6 +117,7 @@ def main():
     print("=" * 60)
     print("PREDICCIONES (modelo entrenado vs. promedio propio vs. mediana reciente)")
     print("=" * 60)
+    preds = {}
     for stat, model_path, label in [
         ("points", args.model_points, "Puntos"),
         ("rebounds", args.model_rebounds, "Rebotes"),
@@ -121,6 +131,20 @@ def main():
         over_under = "OVER" if pred > mediana else "UNDER" if pred < mediana else "IGUAL"
         print(f"{label} ({bundle['model_name']}): {pred:.1f}  |  promedio propio: {avg:.1f}  |  "
               f"mediana ultimos {len(recent)}: {mediana:.1f}  ->  {over_under} esa mediana")
+        preds[stat] = {"pred": pred, "model_name": bundle["model_name"], "baseline": avg}
+
+    if matchup:
+        pt.log_prediction(pt.build_log_row(
+            event_id=matchup["event_id"], game_date=matchup["date"],
+            player_id=player_id, player_name=player_name,
+            team=team["full_name"], team_espn_id=team["espn_id"], opponent=opponent["full_name"],
+            pred_points=preds["points"]["pred"], model_points=preds["points"]["model_name"],
+            baseline_points=preds["points"]["baseline"],
+            pred_rebounds=preds["rebounds"]["pred"], model_rebounds=preds["rebounds"]["model_name"],
+            baseline_rebounds=preds["rebounds"]["baseline"],
+            pred_assists=preds["assists"]["pred"], model_assists=preds["assists"]["model_name"],
+            baseline_assists=preds["assists"]["baseline"],
+        ))
 
     print("\nNOTA: no se usa una linea real de casa de apuestas (no se scrapea ninguna) - "
           "la 'mediana reciente' es un umbral calculado de los propios datos del jugador, "

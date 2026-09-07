@@ -8,9 +8,10 @@ cada jugador, juego por juego, con ventana movil.
 
 Cada fila = UN jugador en UN juego real ya jugado:
   - features: su propio promedio movil de los `window` juegos ANTERIORES
-    (puntos/rebotes/asistencias/minutos), mas el contexto de equipo propio
-    y del rival de ESE juego (tambien point-in-time, nunca el resultado del
-    juego que se esta prediciendo).
+    (puntos/rebotes/asistencias/minutos), el contexto de equipo propio y
+    del rival de ESE juego, y el descanso del EQUIPO de cara a ese juego
+    (dias desde su juego anterior, y si fue back-to-back) - todo
+    point-in-time, nunca el resultado del juego que se esta prediciendo.
   - labels: lo que de verdad anoto/rebot/asistio en ESE juego.
 
 Simplificacion conocida (documentada, no oculta): solo se incluyen
@@ -30,6 +31,7 @@ Uso:
 import argparse
 import sys
 import time
+from datetime import datetime as dt
 
 import pandas as pd
 
@@ -96,6 +98,21 @@ def build_player_rows(team, season, all_team_series, window, min_prior, max_game
             if opp_feats is None:
                 continue
 
+            # Descanso del EQUIPO (no del jugador especificamente - ESPN no
+            # trae minutos de descanso individuales por lesion/rotacion) de
+            # cara a este juego: dias desde el juego anterior del equipo.
+            # Point-in-time (solo mira el juego previo, nunca el actual).
+            days_rest = None
+            if i_team > 0:
+                prev_date = team_series[i_team - 1]["date"]
+                if prev_date and pg["date"]:
+                    d1 = dt.fromisoformat(prev_date.replace("Z", "+00:00")).date()
+                    d2 = dt.fromisoformat(pg["date"].replace("Z", "+00:00")).date()
+                    days_rest = (d2 - d1).days
+            if days_rest is None:
+                continue
+            b2b = int(days_rest <= 1)
+
             rows.append({
                 "event_id": pg["event_id"], "date": pg["date"], "season": season,
                 "player_id": pid, "player_name": info["name"], "team": team["abbreviation"],
@@ -103,6 +120,7 @@ def build_player_rows(team, season, all_team_series, window, min_prior, max_game
                 "avg_assists": avg_assists, "avg_minutes": avg_minutes,
                 "team_off_rtg": team_feats["off_rtg"], "team_pace": team_feats["pace"],
                 "opp_def_rtg": opp_feats["def_rtg"], "opp_pace": opp_feats["pace"],
+                "days_rest": days_rest, "b2b": b2b,
                 "n_prior": len(prior),
                 "label_points": pg["points"], "label_rebounds": pg["rebounds"],
                 "label_assists": pg["assists"], "label_minutes": pg["minutes"],

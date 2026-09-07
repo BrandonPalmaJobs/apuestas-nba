@@ -48,6 +48,8 @@ def build_matchup_row(team_home, team_away, season, last_n, as_of_date):
     row["away_days_rest"] = rep_away.get("days_rest")
     row["home_b2b"] = int(bool(rep_home.get("is_b2b")))
     row["away_b2b"] = int(bool(rep_away.get("is_b2b")))
+    row["home_missing_regulars"] = rep_home.get("missing_regulars")
+    row["away_missing_regulars"] = rep_away.get("missing_regulars")
     return row, rep_home, rep_away
 
 

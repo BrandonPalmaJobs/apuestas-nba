@@ -29,7 +29,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 FEATURES = ["avg_points", "avg_rebounds", "avg_assists", "avg_minutes",
-            "team_off_rtg", "team_pace", "opp_def_rtg", "opp_pace"]
+            "team_off_rtg", "team_pace", "opp_def_rtg", "opp_pace",
+            "days_rest", "b2b"]
 
 STATS = [
     ("points", "label_points", "avg_points", "Puntos"),

@@ -36,6 +36,7 @@ FEATURES = [
     "away_off_rtg", "away_def_rtg", "away_net_rtg", "away_pace", "away_efg_pct", "away_ts_pct",
     "away_tov_pct", "away_oreb_pct", "away_dreb_pct", "away_ast_pct", "away_fast_break_pts", "away_points_in_paint",
     "home_days_rest", "away_days_rest", "home_b2b", "away_b2b",
+    "home_missing_regulars", "away_missing_regulars",
 ]
 
 LABEL_TOTAL = "label_total_points"

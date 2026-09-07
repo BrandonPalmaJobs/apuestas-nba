@@ -20,15 +20,21 @@ Uso:
     python nba_train_data.py --season 2025 --out training_data_nba.csv
     python nba_train_data.py --season 2025 --teams "Lakers,Celtics,Nuggets" --out sample.csv   # prueba rapida
 
-Simplificacion conocida (documentada, no oculta):
-  - Los lesionados NO se meten como feature de entrenamiento (a diferencia
-    del reporte en vivo de nba_report.py, que si los muestra). Un jugador
-    lesionado HOY no dice nada sobre si lo estaba en un juego de hace meses
-    del dataset historico, y reconstruir el estado de lesionados
-    dia-por-dia de la temporada pasada no tiene una fuente publica
-    confiable. El impacto de lesionados se sigue aplicando en el reporte
-    EN VIVO (nba_report.py), no en el reentrenamiento - mismo patron que
-    "enriquecimiento solo en vivo" que ya se uso en el proyecto de MLB.
+Ausencias de la rotacion regular (proxy de lesionados, historico):
+  - No existe una fuente publica confiable con el reporte de lesionados
+    dia-por-dia de temporadas pasadas, asi que en vez de eso se mide algo
+    que SI se puede reconstruir con certeza de los boxscores ya jugados:
+    de los 5 jugadores que MAS seguido arrancaron de titulares en los
+    `window` juegos ANTERIORES a cada juego (point-in-time, mismo criterio
+    que probable_lineup() de nba_report.py), cuantos de verdad NO jugaron
+    (did_not_play) en ESE juego especifico - sea por lesion, descanso,
+    suspension, etc. No distingue la causa, pero captura el efecto
+    (rotacion debilitada) sin depender de un archivo historico que no
+    existe. En vivo (nba_report.py/nba_predict.py), el equivalente es
+    contar cuantos de esos 5 titulares habituales aparecen HOY en el
+    reporte de lesionados de ESPN (mismo numero que "excluidos_por_lesion"
+    de probable_lineup) - mismo criterio, dos fuentes distintas segun si es
+    pasado (boxscore real) o futuro (reporte de lesionados vigente).
 """
 
 import argparse
@@ -86,13 +92,38 @@ def build_team_season_series(team, season, max_games=None):
             d1 = datetime.fromisoformat(prev_date.replace("Z", "+00:00")).date()
             d2 = datetime.fromisoformat(game_date.replace("Z", "+00:00")).date()
             days_rest = (d2 - d1).days
+
+        try:
+            roster = n.espn_game_roster(e["id"], team["espn_id"])
+        except Exception:
+            roster = []
+        started_ids = {str(entry["player_id"]) for entry in roster if entry["starter"]}
+        dnp_ids = {str(entry["player_id"]) for entry in roster if entry["did_not_play"]}
+
         series.append({
             "event_id": e["id"], "date": game_date, "opponent_espn_id": opp_espn_id,
             "advanced": adv, "points": my_points, "opp_points": opp_points,
             "is_home": my_home, "days_rest": days_rest,
+            "started_ids": started_ids, "dnp_ids": dnp_ids,
         })
         prev_date = game_date
     return series
+
+
+def _regular_ids(series, upto_idx, window, top_n=5):
+    """IDs de los jugadores que MAS seguido arrancaron de titulares en los
+    `window` juegos ANTERIORES a upto_idx (point-in-time, nunca incluye el
+    juego actual) - la "rotacion regular esperada" contra la que se compara
+    quien de verdad jugo en el juego actual (ver dnp_ids), para medir el
+    impacto de ausencias sin depender de un historico de lesionados."""
+    prior = series[max(0, upto_idx - window):upto_idx]
+    counts = {}
+    for g in prior:
+        for pid in g.get("started_ids", set()):
+            counts[pid] = counts.get(pid, 0) + 1
+    if not counts:
+        return set()
+    return set(sorted(counts, key=counts.get, reverse=True)[:top_n])
 
 
 def _rolling_features(series, upto_idx, window):
@@ -172,6 +203,14 @@ def build_rows_for_team(team, season, all_series, window, min_prior):
         home_b2b = home_days_rest is not None and home_days_rest <= 1
         away_b2b = away_days_rest is not None and away_days_rest <= 1
 
+        home_regulars = _regular_ids(series, i, window)
+        home_missing_regulars = len(home_regulars & g["dnp_ids"])
+        away_game_idx = next((idx for idx, x in enumerate(opp_series) if x["event_id"] == g["event_id"]), None)
+        away_missing_regulars = None
+        if away_game_idx is not None:
+            away_regulars = _regular_ids(opp_series, away_game_idx, window)
+            away_missing_regulars = len(away_regulars & opp_series[away_game_idx]["dnp_ids"])
+
         baseline = _baseline_projection(home_feats, away_feats, home_b2b, away_b2b)
         if baseline is None:
             continue
@@ -184,6 +223,7 @@ def build_rows_for_team(team, season, all_series, window, min_prior):
                 [x for x in opp_series if x["date"] and x["date"] < g["date"]]),
             "home_days_rest": home_days_rest, "away_days_rest": away_days_rest,
             "home_b2b": int(home_b2b), "away_b2b": int(away_b2b),
+            "home_missing_regulars": home_missing_regulars, "away_missing_regulars": away_missing_regulars,
         }
         for k in ADV_KEYS:
             row[f"home_{k}"] = home_feats[k]
