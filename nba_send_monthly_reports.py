@@ -14,9 +14,15 @@ Uso:
 
 import os
 import sys
+import time
 
 import nba_investor_emails as ie
 import nba_investors as inv
+
+# Ver PAUSA_ENTRE_INVERSIONISTAS en nba_send_investor_reports.py - mismo
+# motivo (no rafaguear el limite de solicitudes por minuto de Google al
+# escalar a ~100 usuarios).
+PAUSA_ENTRE_INVERSIONISTAS = 1.0
 
 
 def main():
@@ -50,6 +56,7 @@ def main():
                 total_ok += 1
             else:
                 total_fail += 1
+            time.sleep(PAUSA_ENTRE_INVERSIONISTAS)
 
     print(f"\nListo: {total_ok} enviados, {total_fail} fallidos, {total_sin_correo} sin correo registrado.")
     if total_fail:

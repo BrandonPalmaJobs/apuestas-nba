@@ -16,9 +16,18 @@ Uso:
 
 import os
 import sys
+import time
 
 import nba_investor_emails as ie
 import nba_investors as inv
+
+# Pausa entre inversionista e inversionista - con pocos usuarios no hace
+# falta, pero pensando en escalar a ~100 usuarios, mandar todo de golpe
+# puede rafaguear el limite de solicitudes por minuto de la API de
+# Google Sheets (60/min por defecto). nba_investors.py ya reintenta solo
+# si de todos modos se dispara un 429, esta pausa es para no llegar ahi
+# en primer lugar.
+PAUSA_ENTRE_INVERSIONISTAS = 1.0
 
 
 def main():
@@ -54,6 +63,7 @@ def main():
                 total_ok += 1
             else:
                 total_fail += 1
+            time.sleep(PAUSA_ENTRE_INVERSIONISTAS)
 
     print(f"\nListo: {total_ok} enviados, {total_fail} fallidos, {total_sin_correo} sin correo registrado.")
     if total_fail:

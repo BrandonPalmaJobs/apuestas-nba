@@ -28,6 +28,7 @@ financieras" (o cada Sheet individualmente) con el correo de esa cuenta
 de servicio, con permiso de Editor.
 """
 
+import time
 from datetime import datetime, timedelta, timezone
 
 # Mexico City es UTC-6 todo el anio (dejo de usar horario de verano desde
@@ -92,6 +93,27 @@ def get_client(credentials_path):
     return gspread.service_account(filename=credentials_path)
 
 
+def _con_reintentos(fn, *args, max_retries=4, espera_base=8, **kwargs):
+    """Reintenta `fn` con espera creciente si Google responde 429 (limite
+    de solicitudes agotado) - pensado para cuando se procesan muchos
+    inversionistas seguidos (ej. el envio nocturno, que con ~100 personas
+    puede rafaguear la cuota por minuto de la API). NO reintenta otro
+    tipo de error (esos si son reales, insistir no ayuda)."""
+    import gspread
+    for intento in range(max_retries):
+        try:
+            return fn(*args, **kwargs)
+        except gspread.exceptions.APIError as e:
+            es_429 = False
+            try:
+                es_429 = e.response.status_code == 429
+            except Exception:
+                es_429 = "429" in str(e) or "Quota exceeded" in str(e)
+            if not es_429 or intento == max_retries - 1:
+                raise
+            time.sleep(espera_base * (intento + 1))
+
+
 _SHEET_CACHE = {}
 
 
@@ -110,7 +132,7 @@ def _open_tier_sheet(gc, tier):
         raise ValueError(f"Nivel de inversion desconocido: {tier}. Validos: {list(TIER_SHEET_NAMES)}")
     key = (id(gc), tier)
     if key not in _SHEET_CACHE:
-        _SHEET_CACHE[key] = gc.open(sheet_name)
+        _SHEET_CACHE[key] = _con_reintentos(gc.open, sheet_name)
     return _SHEET_CACHE[key]
 
 
@@ -150,7 +172,7 @@ def _read_bet_rows(ws):
     """Filas de datos de la pestana de un inversionista (despues de la
     fila de encabezado, columnas B en adelante), como lista de dicts con
     las llaves de BET_HEADERS. Ignora filas totalmente vacias."""
-    all_values = ws.get_all_values()
+    all_values = _con_reintentos(ws.get_all_values)
     data_rows = all_values[HEADER_ROW:]
     out = []
     for row in data_rows:
@@ -177,7 +199,7 @@ def _append_bet_row(ws, values):
 def list_investors(gc, tier):
     sh = _open_tier_sheet(gc, tier)
     ws = _get_or_create_registro(sh)
-    rows = ws.get_all_records()
+    rows = _con_reintentos(ws.get_all_records)
     return [{"nombre": r["Nombre"], "telefono": r.get("Telefono", ""), "correo": r.get("Correo", "")}
             for r in rows if r.get("Nombre")]
 
