@@ -4,9 +4,15 @@ nivel ($1,000/$3,000/$5,000/$10,000) es un Google Sheet separado (ya
 existente en la carpeta de Drive del usuario, ej. "Inversores de
 $1,000"). Dentro de cada Sheet:
   - Una pestana "Registro": lista de inversionistas de ese nivel
-    (Nombre, Telefono, Correo).
-  - Una pestana POR INVERSIONISTA (con su nombre): historial de sus
-    apuestas y su saldo acumulado.
+    (Nombre, Telefono, Correo) - para saber a quien mandarle el correo
+    nocturno mas adelante.
+  - Una pestana POR INVERSIONISTA (con su nombre, ej. "Mario Palma"):
+    historial de sus apuestas y su saldo acumulado, en el MISMO formato
+    ya creado a mano por el usuario: columna A vacia, encabezados en la
+    fila 2 empezando en la columna B (Partido al que se aposto | Fecha
+    en la que se aposto | Apuesta que se realizo | Momio en la que se
+    tomo | Inversion actual | Ganada / Perdida | Inversion despues de
+    apuesta).
 
 Cada inversionista tiene su PROPIO monto fijo por apuesta (no es un pool
 compartido) - si dos personas estan en el nivel de $1,000, cada una tiene
@@ -16,13 +22,13 @@ Momios en formato AMERICANO (+150, -170), no decimales ni porcentajes:
     momio positivo: ganancia = monto * (momio / 100)
     momio negativo: ganancia = monto * (100 / abs(momio))
 
-Requiere el mismo secret GOOGLE_CREDENTIALS_JSON ya usado en el proyecto
-de MLB (cuenta de servicio de Google) - hay que compartir la carpeta
-"apuestas financieras" (o cada Sheet individualmente) con el correo de
-esa cuenta de servicio, con permiso de Editor.
+Requiere el secret GOOGLE_CREDENTIALS_JSON (cuenta de servicio de Google
+dedicada a este proyecto) - hay que compartir la carpeta "apuestas
+financieras" (o cada Sheet individualmente) con el correo de esa cuenta
+de servicio, con permiso de Editor.
 """
 
-from datetime import date, datetime
+from datetime import date
 
 TIER_SHEET_NAMES = {
     1000: "Inversores de $1,000",
@@ -33,7 +39,25 @@ TIER_SHEET_NAMES = {
 
 REGISTRO_TAB = "Registro"
 REGISTRO_HEADERS = ["Nombre", "Telefono", "Correo"]
-BET_HEADERS = ["Fecha", "Descripcion", "Monto", "Momio", "Resultado", "Ganancia_Perdida", "Saldo"]
+
+# Mismo formato que las pestanas ya creadas a mano por el usuario (ej.
+# "Mario Palma", "Emmanuel Rios" en el Sheet de $1,000): la columna A
+# queda vacia, los encabezados van en la fila 2 empezando en la columna B.
+HEADER_ROW = 2
+DATA_START_COL = "B"
+BET_HEADERS = [
+    "Partido al que se aposto", "Fecha en la que se aposto", "Apuesta que se realizo",
+    "Momio en la que se tomo", "Inversion actual", "Ganada / Perdida", "Inversion despues de apuesta",
+]
+
+
+def _parse_number(value):
+    """El Sheet usa formato regional en espanol (coma decimal: '90,91' en
+    vez de '90.91') al leer valores YA formateados de vuelta - sin esto,
+    float() truena o da un numero equivocado en silencio."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    return float(str(value).strip().replace(",", "."))
 
 
 def american_odds_profit(stake, odds, result):
@@ -61,19 +85,61 @@ def _open_tier_sheet(gc, tier):
     return gc.open(sheet_name)
 
 
-def _get_or_create_tab(sh, tab_name, headers):
+def _get_or_create_registro(sh):
     import gspread
     try:
-        ws = sh.worksheet(tab_name)
+        return sh.worksheet(REGISTRO_TAB)
     except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(title=tab_name, rows=200, cols=len(headers) + 2)
-        ws.append_row(headers)
-    return ws
+        ws = sh.add_worksheet(title=REGISTRO_TAB, rows=200, cols=len(REGISTRO_HEADERS) + 1)
+        ws.append_row(REGISTRO_HEADERS)
+        return ws
+
+
+def _get_or_create_investor_tab(sh, nombre):
+    """Pestana de UN inversionista - si ya existe (ej. creada a mano por
+    el usuario, como 'Mario Palma'), se usa tal cual sin tocar sus
+    encabezados. Si no existe, se crea con el mismo formato exacto
+    (columna A vacia, encabezados en la fila 2 desde la columna B)."""
+    import gspread
+    try:
+        return sh.worksheet(nombre)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sh.add_worksheet(title=nombre, rows=200, cols=len(BET_HEADERS) + 2)
+        ws.update(range_name=f"{DATA_START_COL}{HEADER_ROW}", values=[BET_HEADERS])
+        return ws
+
+
+def _read_bet_rows(ws):
+    """Filas de datos de la pestana de un inversionista (despues de la
+    fila de encabezado, columnas B en adelante), como lista de dicts con
+    las llaves de BET_HEADERS. Ignora filas totalmente vacias."""
+    all_values = ws.get_all_values()
+    data_rows = all_values[HEADER_ROW:]
+    out = []
+    for row in data_rows:
+        cells = row[1:1 + len(BET_HEADERS)]
+        if not any(c.strip() for c in cells if c):
+            continue
+        cells = cells + [""] * (len(BET_HEADERS) - len(cells))
+        out.append(dict(zip(BET_HEADERS, cells)))
+    return out
+
+
+def _append_bet_row(ws, values):
+    """Escribe una fila nueva justo debajo de la ultima fila con datos,
+    en las columnas B..H (deja la columna A vacia, igual que las
+    pestanas creadas a mano)."""
+    col_b_values = ws.col_values(2)  # columna B
+    next_row = len(col_b_values) + 1
+    if next_row <= HEADER_ROW:
+        next_row = HEADER_ROW + 1
+    end_col = chr(ord(DATA_START_COL) + len(BET_HEADERS) - 1)
+    ws.update(range_name=f"{DATA_START_COL}{next_row}:{end_col}{next_row}", values=[values])
 
 
 def list_investors(gc, tier):
     sh = _open_tier_sheet(gc, tier)
-    ws = _get_or_create_tab(sh, REGISTRO_TAB, REGISTRO_HEADERS)
+    ws = _get_or_create_registro(sh)
     rows = ws.get_all_records()
     return [{"nombre": r["Nombre"], "telefono": r.get("Telefono", ""), "correo": r.get("Correo", "")}
             for r in rows if r.get("Nombre")]
@@ -81,46 +147,49 @@ def list_investors(gc, tier):
 
 def add_investor(gc, tier, nombre, telefono, correo):
     sh = _open_tier_sheet(gc, tier)
-    registro = _get_or_create_tab(sh, REGISTRO_TAB, REGISTRO_HEADERS)
+    registro = _get_or_create_registro(sh)
     existentes = [r["Nombre"].strip().lower() for r in registro.get_all_records() if r.get("Nombre")]
     if nombre.strip().lower() in existentes:
         raise ValueError(f"'{nombre}' ya esta registrado en el nivel ${tier}.")
     registro.append_row([nombre, telefono, correo])
-
-    tab = _get_or_create_tab(sh, nombre, BET_HEADERS)
-    if len(tab.get_all_values()) <= 1:
-        tab.append_row([date.today().isoformat(), "Saldo inicial", 0, "", "", 0, tier])
+    _get_or_create_investor_tab(sh, nombre)
     return True
 
 
 def get_investor_balance(gc, tier, nombre):
+    """Saldo actual: la 'Inversion despues de apuesta' de la ULTIMA
+    apuesta registrada, o el monto nominal del nivel si todavia no tiene
+    ninguna apuesta."""
     sh = _open_tier_sheet(gc, tier)
-    tab = sh.worksheet(nombre)
-    rows = tab.get_all_records()
+    ws = _get_or_create_investor_tab(sh, nombre)
+    rows = _read_bet_rows(ws)
     if not rows:
-        return tier
-    return float(rows[-1]["Saldo"])
+        return float(tier)
+    try:
+        return _parse_number(rows[-1]["Inversion despues de apuesta"])
+    except (ValueError, KeyError):
+        return float(tier)
 
 
-def log_bet(gc, tier, nombre, descripcion, monto, momio, resultado, fecha=None):
+def log_bet(gc, tier, nombre, partido, apuesta, monto, momio, resultado, fecha=None):
     """Agrega una apuesta resuelta (resultado ya conocido: 'Gano'/'Perdio'/
     'Push') al historial del inversionista y actualiza su saldo
-    acumulado. Regresa la fila agregada (dict)."""
+    acumulado. Regresa la fila agregada (dict, llaves de BET_HEADERS)."""
     if resultado not in ("Gano", "Perdio", "Push"):
         raise ValueError("resultado debe ser 'Gano', 'Perdio' o 'Push'")
     fecha = fecha or date.today().isoformat()
 
     sh = _open_tier_sheet(gc, tier)
-    tab = _get_or_create_tab(sh, nombre, BET_HEADERS)
+    ws = _get_or_create_investor_tab(sh, nombre)
     saldo_previo = get_investor_balance(gc, tier, nombre)
 
     ganancia = american_odds_profit(monto, momio, resultado)
     saldo_nuevo = saldo_previo + ganancia
 
     momio_str = f"+{momio}" if momio > 0 else str(momio)
-    row = [fecha, descripcion, monto, momio_str, resultado, round(ganancia, 2), round(saldo_nuevo, 2)]
-    tab.append_row(row)
-    return dict(zip(BET_HEADERS, row))
+    values = [partido, fecha, apuesta, momio_str, monto, round(ganancia, 2), round(saldo_nuevo, 2)]
+    _append_bet_row(ws, values)
+    return dict(zip(BET_HEADERS, values))
 
 
 def get_bets_for_date(gc, tier, nombre, fecha):
@@ -128,11 +197,10 @@ def get_bets_for_date(gc, tier, nombre, fecha):
     (YYYY-MM-DD) - para el reporte por correo."""
     sh = _open_tier_sheet(gc, tier)
     try:
-        tab = sh.worksheet(nombre)
+        ws = sh.worksheet(nombre)
     except Exception:
         return []
-    rows = tab.get_all_records()
-    return [r for r in rows if str(r.get("Fecha")) == fecha and r.get("Descripcion") != "Saldo inicial"]
+    return [r for r in _read_bet_rows(ws) if r.get("Fecha en la que se aposto") == fecha]
 
 
 def all_investors_all_tiers(gc):

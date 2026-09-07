@@ -631,21 +631,23 @@ def render_inversionistas():
                 st.error(f"No se pudo leer el Sheet de ${tier2:,}: {e}")
             nombres = [i["nombre"] for i in investors]
             inversionista = st.selectbox("Inversionista", nombres) if nombres else None
-            descripcion = st.text_input("Descripcion de la apuesta (ej. 'Lakers ML vs Celtics')")
+            partido = st.text_input("Partido al que se aposto (ej. 'Lakers vs Celtics')")
+            apuesta = st.text_input("Apuesta que se realizo (ej. 'Lakers -4.5' o 'Over 220.5')")
             c1, c2 = st.columns(2)
-            monto = c1.number_input("Monto apostado ($)", min_value=0.0, step=10.0)
+            monto = c1.number_input("Inversion actual ($ apostado)", min_value=0.0, step=10.0)
             momio = c2.number_input("Momio americano (ej. 150 o -170)", step=5, format="%d")
             resultado = st.radio("Resultado", ["Gano", "Perdio", "Push"], horizontal=True)
             submitted2 = st.form_submit_button("Registrar apuesta", type="primary", disabled=not nombres)
         if submitted2:
-            if not inversionista or not descripcion or momio == 0:
-                st.error("Completa inversionista, descripcion y un momio distinto de 0.")
+            if not inversionista or not partido or not apuesta or momio == 0:
+                st.error("Completa inversionista, partido, apuesta y un momio distinto de 0.")
             else:
                 try:
-                    row = inv.log_bet(gc, tier2, inversionista, descripcion, monto, int(momio), resultado)
-                    signo = "+" if row["Ganancia_Perdida"] >= 0 else ""
-                    st.success(f"Registrado: {inversionista} {resultado} {signo}{row['Ganancia_Perdida']:.2f} - "
-                               f"saldo nuevo: ${row['Saldo']:,.2f}")
+                    row = inv.log_bet(gc, tier2, inversionista, partido, apuesta, monto, int(momio), resultado)
+                    ganancia = row["Ganada / Perdida"]
+                    signo = "+" if ganancia >= 0 else ""
+                    st.success(f"Registrado: {inversionista} {resultado} {signo}{ganancia:.2f} - "
+                               f"saldo nuevo: ${row['Inversion despues de apuesta']:,.2f}")
                 except Exception as e:
                     st.error(str(e))
 
