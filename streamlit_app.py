@@ -13,10 +13,12 @@ Correr localmente para probar:
     streamlit run streamlit_app.py
 """
 
+import json
 import os
 import statistics
 import subprocess
 import sys
+import tempfile
 from contextlib import contextmanager
 from datetime import date
 
@@ -30,6 +32,7 @@ if APP_DIR not in sys.path:
 
 import git_sync
 import nba_data as n
+import nba_investors as inv
 import nba_props_predict as pp
 import nba_report as r
 import nba_track as track
@@ -559,6 +562,111 @@ def render_reentrenar():
 
 
 # ---------------------------------------------------------------------------
+# Inversionistas (registro de apuestas reales + saldo por persona)
+# ---------------------------------------------------------------------------
+
+def _materialize_google_credentials():
+    raw = st.secrets["GOOGLE_CREDENTIALS_JSON"]
+    content = raw if isinstance(raw, str) else json.dumps(dict(raw))
+    path = os.path.join(tempfile.gettempdir(), "nba_app_google_credentials.json")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return path
+
+
+@st.cache_resource
+def _get_investors_client():
+    creds_path = _materialize_google_credentials()
+    return inv.get_client(creds_path)
+
+
+def render_inversionistas():
+    st.header("💰 Inversionistas")
+    st.caption("Registro de apuestas reales por inversionista, guardado en Google Sheets - "
+               "cada nivel es un Sheet separado, cada inversionista tiene su propia pestaña con "
+               "su historial y saldo. Los momios son formato AMERICANO (+150, -170), no porcentajes.")
+
+    if "GOOGLE_CREDENTIALS_JSON" not in st.secrets:
+        st.warning(
+            "Falta el secret GOOGLE_CREDENTIALS_JSON (la misma cuenta de servicio de Google que ya "
+            "se usa en el proyecto de MLB sirve aqui). Comparte la carpeta 'apuestas financieras' de "
+            "Drive con el correo de esa cuenta de servicio (permiso Editor) y agrega el secret."
+        )
+        return
+
+    try:
+        gc = _get_investors_client()
+    except Exception as e:
+        st.error(f"No se pudo conectar a Google Sheets: {e}")
+        return
+
+    tab_apuesta, tab_alta, tab_ver = st.tabs(["Registrar apuesta", "Agregar inversionista", "Ver inversionistas"])
+
+    with tab_alta:
+        with st.form("form_alta_inversionista"):
+            tier = st.selectbox("Nivel", list(inv.TIER_SHEET_NAMES.keys()),
+                                 format_func=lambda x: f"${x:,}")
+            nombre = st.text_input("Nombre")
+            telefono = st.text_input("Telefono")
+            correo = st.text_input("Correo")
+            submitted = st.form_submit_button("Agregar", type="primary")
+        if submitted:
+            if not nombre or not correo:
+                st.error("Nombre y correo son obligatorios.")
+            else:
+                try:
+                    inv.add_investor(gc, tier, nombre.strip(), telefono.strip(), correo.strip())
+                    st.success(f"{nombre} agregado al nivel ${tier:,} con saldo inicial ${tier:,}.")
+                except Exception as e:
+                    st.error(str(e))
+
+    with tab_apuesta:
+        with st.form("form_registrar_apuesta"):
+            tier2 = st.selectbox("Nivel", list(inv.TIER_SHEET_NAMES.keys()),
+                                  format_func=lambda x: f"${x:,}", key="bet_tier")
+            try:
+                investors = inv.list_investors(gc, tier2)
+            except Exception as e:
+                investors = []
+                st.error(f"No se pudo leer el Sheet de ${tier2:,}: {e}")
+            nombres = [i["nombre"] for i in investors]
+            inversionista = st.selectbox("Inversionista", nombres) if nombres else None
+            descripcion = st.text_input("Descripcion de la apuesta (ej. 'Lakers ML vs Celtics')")
+            c1, c2 = st.columns(2)
+            monto = c1.number_input("Monto apostado ($)", min_value=0.0, step=10.0)
+            momio = c2.number_input("Momio americano (ej. 150 o -170)", step=5, format="%d")
+            resultado = st.radio("Resultado", ["Gano", "Perdio", "Push"], horizontal=True)
+            submitted2 = st.form_submit_button("Registrar apuesta", type="primary", disabled=not nombres)
+        if submitted2:
+            if not inversionista or not descripcion or momio == 0:
+                st.error("Completa inversionista, descripcion y un momio distinto de 0.")
+            else:
+                try:
+                    row = inv.log_bet(gc, tier2, inversionista, descripcion, monto, int(momio), resultado)
+                    signo = "+" if row["Ganancia_Perdida"] >= 0 else ""
+                    st.success(f"Registrado: {inversionista} {resultado} {signo}{row['Ganancia_Perdida']:.2f} - "
+                               f"saldo nuevo: ${row['Saldo']:,.2f}")
+                except Exception as e:
+                    st.error(str(e))
+
+    with tab_ver:
+        tier3 = st.selectbox("Nivel", list(inv.TIER_SHEET_NAMES.keys()),
+                              format_func=lambda x: f"${x:,}", key="view_tier")
+        try:
+            investors3 = inv.list_investors(gc, tier3)
+        except Exception as e:
+            investors3 = []
+            st.error(f"No se pudo leer el Sheet de ${tier3:,}: {e}")
+        if not investors3:
+            st.info("Sin inversionistas registrados en este nivel todavia.")
+        for i in investors3:
+            saldo = inv.get_investor_balance(gc, tier3, i["nombre"])
+            ganancia = saldo - tier3
+            delta_txt = f"{'+' if ganancia >= 0 else ''}{ganancia:,.2f} desde el inicio"
+            st.metric(i["nombre"], f"${saldo:,.2f}", delta=delta_txt)
+
+
+# ---------------------------------------------------------------------------
 # Ajustes
 # ---------------------------------------------------------------------------
 
@@ -566,6 +674,7 @@ def render_ajustes():
     st.header("⚙️ Ajustes")
     st.write("Estado de la configuracion (Settings → Secrets en Streamlit Cloud):")
     st.write(f"- GitHub (guardar reentrenamientos): {'✅ configurado' if git_sync.is_configured(st.secrets) else '❌ falta GITHUB_TOKEN / GITHUB_REPO'}")
+    st.write(f"- Google Sheets (inversionistas): {'✅ configurado' if 'GOOGLE_CREDENTIALS_JSON' in st.secrets else '❌ falta GOOGLE_CREDENTIALS_JSON'}")
     st.write(f"- PIN de acceso: {'✅ configurado' if 'APP_PASSWORD' in st.secrets else 'ℹ️ no configurado (app abierta)'}")
 
 
@@ -583,6 +692,7 @@ def main():
         "🏀 Props de jugador",
         "📈 Evaluar predicciones",
         "🔁 Reentrenar modelos",
+        "💰 Inversionistas",
         "⚙️ Ajustes",
     ])
 
@@ -594,6 +704,8 @@ def main():
         render_evaluar()
     elif section == "🔁 Reentrenar modelos":
         render_reentrenar()
+    elif section == "💰 Inversionistas":
+        render_inversionistas()
     elif section == "⚙️ Ajustes":
         render_ajustes()
 
