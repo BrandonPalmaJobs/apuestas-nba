@@ -349,8 +349,7 @@ def _movimientos_de_hoy(historial, fecha):
     """Filtra el historial YA leido (get_full_history, llaves
     simplificadas) por fecha y lo regresa con los nombres de columna
     originales del Sheet - para no tener que volver a leer la pestana
-    solo para sacar los movimientos de hoy (get_bets_for_date hacia una
-    lectura aparte de la misma info)."""
+    solo para sacar los movimientos de hoy."""
     out = []
     for h in historial:
         if h["fecha"] != fecha:

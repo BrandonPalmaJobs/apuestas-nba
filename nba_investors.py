@@ -121,10 +121,10 @@ def _open_tier_sheet(gc, tier):
     """gc.open() busca por titulo (llamada a la API de Drive + Sheets, la
     mas cara de todas) - se cachea por (cliente, nivel) porque una sola
     accion del usuario (ej. mandar un reporte) puede terminar abriendo el
-    MISMO Sheet 3-4 veces si no se reusa (get_bets_for_date,
-    get_full_history, get_investor_balance cada uno lo abrian por su
-    cuenta) - eso fue lo que disparo el limite de solicitudes de Google
-    la primera vez que se probo el correo. gc normalmente vive cacheado
+    MISMO Sheet varias veces si no se reusa (distintas funciones de
+    lectura lo abrian cada una por su cuenta) - eso fue lo que disparo el
+    limite de solicitudes de Google la primera vez que se probo el
+    correo. gc normalmente vive cacheado
     con @st.cache_resource en la app, asi que este cache dura mientras
     la app siga corriendo, no se vuelve a abrir en cada clic."""
     sheet_name = TIER_SHEET_NAMES.get(tier)
@@ -416,17 +416,6 @@ def get_full_history_batch(gc, tier, nombres):
             parsed_rows.append(dict(zip(BET_HEADERS, cells)))
         out[nombre] = _parse_history_rows(parsed_rows)
     return out
-
-
-def get_bets_for_date(gc, tier, nombre, fecha):
-    """Todas las apuestas de un inversionista logueadas en `fecha`
-    (YYYY-MM-DD) - para el reporte por correo."""
-    sh = _open_tier_sheet(gc, tier)
-    try:
-        ws = sh.worksheet(nombre)
-    except Exception:
-        return []
-    return [r for r in _read_bet_rows(ws) if r.get("Fecha en la que se aposto") == fecha]
 
 
 def all_investors_all_tiers(gc):
