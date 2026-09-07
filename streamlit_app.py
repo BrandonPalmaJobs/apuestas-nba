@@ -581,6 +581,35 @@ def _get_investors_client():
     return inv.get_client(creds_path)
 
 
+# Streamlit vuelve a correr TODO el script en cada clic/interaccion, asi que
+# sin cachear esto la misma lectura de Google Sheets se repetia muchas mas
+# veces de lo que parece (cambiar de pestaña, abrir un selectbox, etc.) -
+# eso fue lo que disparo un limite real de solicitudes de Google. Un TTL
+# corto (20s) evita eso sin que los datos se vean desactualizados por
+# mucho tiempo; ademas, cualquier accion que ESCRIBE (_invalidar_cache_inversionistas)
+# limpia el cache de inmediato para que el usuario siempre vea su cambio
+# reflejado al toque.
+@st.cache_data(ttl=20)
+def _cached_list_investors(_gc, tier):
+    return inv.list_investors(_gc, tier)
+
+
+@st.cache_data(ttl=20)
+def _cached_get_investor_balance(_gc, tier, nombre):
+    return inv.get_investor_balance(_gc, tier, nombre)
+
+
+@st.cache_data(ttl=20)
+def _cached_get_full_history(_gc, tier, nombre):
+    return inv.get_full_history(_gc, tier, nombre)
+
+
+def _invalidar_cache_inversionistas():
+    _cached_list_investors.clear()
+    _cached_get_investor_balance.clear()
+    _cached_get_full_history.clear()
+
+
 def render_inversionistas():
     st.header("💰 Inversionistas")
     st.caption("Registro de apuestas reales por inversionista, guardado en Google Sheets - "
@@ -620,6 +649,7 @@ def render_inversionistas():
             else:
                 try:
                     inv.add_investor(gc, tier, nombre.strip(), telefono.strip(), correo.strip())
+                    _invalidar_cache_inversionistas()
                     st.success(f"{nombre} agregado al nivel ${tier:,} con saldo inicial ${tier:,}.")
                 except Exception as e:
                     st.error(str(e))
@@ -629,7 +659,7 @@ def render_inversionistas():
             tier2 = st.selectbox("Nivel", list(inv.TIER_SHEET_NAMES.keys()),
                                   format_func=lambda x: f"${x:,}", key="bet_tier")
             try:
-                investors = inv.list_investors(gc, tier2)
+                investors = _cached_list_investors(gc, tier2)
             except Exception as e:
                 investors = []
                 st.error(f"No se pudo leer el Sheet de ${tier2:,}: {e}")
@@ -656,6 +686,7 @@ def render_inversionistas():
                 for nom in objetivo:
                     try:
                         row = inv.log_bet(gc, tier2, nom, partido, apuesta, monto, int(momio), resultado)
+                        _invalidar_cache_inversionistas()
                         ganancia = row["Ganada / Perdida"]
                         signo = "+" if ganancia >= 0 else ""
                         st.success(f"{nom}: {resultado} {signo}{ganancia:.2f} - "
@@ -671,7 +702,7 @@ def render_inversionistas():
             tier_m = st.selectbox("Nivel", list(inv.TIER_SHEET_NAMES.keys()),
                                    format_func=lambda x: f"${x:,}", key="mov_tier")
             try:
-                investors_m = inv.list_investors(gc, tier_m)
+                investors_m = _cached_list_investors(gc, tier_m)
             except Exception as e:
                 investors_m = []
                 st.error(f"No se pudo leer el Sheet de ${tier_m:,}: {e}")
@@ -686,6 +717,7 @@ def render_inversionistas():
             else:
                 try:
                     row = inv.log_movement(gc, tier_m, inversionista_m, tipo_m, monto_m)
+                    _invalidar_cache_inversionistas()
                     st.success(f"{tipo_m} de ${monto_m:,.2f} registrado para {inversionista_m} - "
                                f"saldo nuevo: ${row['Inversion despues de apuesta']:,.2f}")
                 except Exception as e:
@@ -697,7 +729,7 @@ def render_inversionistas():
         tier_e = st.selectbox("Nivel", list(inv.TIER_SHEET_NAMES.keys()),
                                format_func=lambda x: f"${x:,}", key="edit_tier")
         try:
-            investors_e = inv.list_investors(gc, tier_e)
+            investors_e = _cached_list_investors(gc, tier_e)
         except Exception as e:
             investors_e = []
             st.error(f"No se pudo leer el Sheet de ${tier_e:,}: {e}")
@@ -713,6 +745,7 @@ def render_inversionistas():
             if guardar:
                 try:
                     inv.update_investor(gc, tier_e, inversionista_e, nuevo_tel.strip(), nuevo_correo.strip())
+                    _invalidar_cache_inversionistas()
                     st.success(f"{inversionista_e} actualizado.")
                 except Exception as e:
                     st.error(str(e))
@@ -723,6 +756,7 @@ def render_inversionistas():
             if st.button("Eliminar inversionista", disabled=not confirmar_borrar):
                 try:
                     inv.delete_investor(gc, tier_e, inversionista_e)
+                    _invalidar_cache_inversionistas()
                     st.success(f"{inversionista_e} eliminado del nivel ${tier_e:,}.")
                     st.rerun()
                 except Exception as e:
@@ -736,7 +770,7 @@ def render_inversionistas():
             tier_origen = st.selectbox("Nivel actual", list(inv.TIER_SHEET_NAMES.keys()),
                                         format_func=lambda x: f"${x:,}", key="nivel_origen")
             try:
-                investors_n = inv.list_investors(gc, tier_origen)
+                investors_n = _cached_list_investors(gc, tier_origen)
             except Exception as e:
                 investors_n = []
                 st.error(f"No se pudo leer el Sheet de ${tier_origen:,}: {e}")
@@ -757,6 +791,7 @@ def render_inversionistas():
                 try:
                     inv.move_investor_tier(gc, tier_origen, tier_destino, inversionista_n,
                                             nuevo_saldo=saldo_manual)
+                    _invalidar_cache_inversionistas()
                     st.success(f"{inversionista_n} paso del nivel ${tier_origen:,} al nivel ${tier_destino:,}.")
                 except Exception as e:
                     st.error(str(e))
@@ -765,14 +800,14 @@ def render_inversionistas():
         tier3 = st.selectbox("Nivel", list(inv.TIER_SHEET_NAMES.keys()),
                               format_func=lambda x: f"${x:,}", key="view_tier")
         try:
-            investors3 = inv.list_investors(gc, tier3)
+            investors3 = _cached_list_investors(gc, tier3)
         except Exception as e:
             investors3 = []
             st.error(f"No se pudo leer el Sheet de ${tier3:,}: {e}")
         if not investors3:
             st.info("Sin inversionistas registrados en este nivel todavia.")
         for i in investors3:
-            saldo = inv.get_investor_balance(gc, tier3, i["nombre"])
+            saldo = _cached_get_investor_balance(gc, tier3, i["nombre"])
             ganancia = saldo - tier3
             delta_txt = f"{'+' if ganancia >= 0 else ''}{ganancia:,.2f} desde el inicio"
             st.metric(i["nombre"], f"${saldo:,.2f}", delta=delta_txt)
@@ -783,7 +818,7 @@ def render_inversionistas():
         tier_x = st.selectbox("Nivel", list(inv.TIER_SHEET_NAMES.keys()),
                                format_func=lambda x: f"${x:,}", key="analisis_tier")
         try:
-            investors_x = inv.list_investors(gc, tier_x)
+            investors_x = _cached_list_investors(gc, tier_x)
         except Exception as e:
             investors_x = []
             st.error(f"No se pudo leer el Sheet de ${tier_x:,}: {e}")
@@ -793,8 +828,8 @@ def render_inversionistas():
         else:
             inversionista_x = st.selectbox("Inversionista", nombres_x, key="analisis_inv")
             try:
-                historial = inv.get_full_history(gc, tier_x, inversionista_x)
-                saldo_actual = inv.get_investor_balance(gc, tier_x, inversionista_x)
+                historial = _cached_get_full_history(gc, tier_x, inversionista_x)
+                saldo_actual = _cached_get_investor_balance(gc, tier_x, inversionista_x)
             except Exception as e:
                 historial = []
                 saldo_actual = tier_x
@@ -853,7 +888,7 @@ def render_inversionistas():
             tier_c = st.selectbox("Nivel", list(inv.TIER_SHEET_NAMES.keys()),
                                    format_func=lambda x: f"${x:,}", key="correo_tier")
             try:
-                investors_c = inv.list_investors(gc, tier_c)
+                investors_c = _cached_list_investors(gc, tier_c)
             except Exception as e:
                 investors_c = []
                 st.error(f"No se pudo leer el Sheet de ${tier_c:,}: {e}")
