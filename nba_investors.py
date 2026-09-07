@@ -156,6 +156,99 @@ def add_investor(gc, tier, nombre, telefono, correo):
     return True
 
 
+def update_investor(gc, tier, nombre, telefono=None, correo=None):
+    """Edita telefono/correo de un inversionista YA registrado (el nombre
+    no se puede cambiar aqui - es el mismo nombre de su pestana de
+    apuestas, cambiarlo rompería esa referencia)."""
+    sh = _open_tier_sheet(gc, tier)
+    registro = _get_or_create_registro(sh)
+    cell = registro.find(nombre, in_column=1)
+    if not cell:
+        raise ValueError(f"'{nombre}' no esta registrado en el nivel ${tier}.")
+    if telefono is not None:
+        registro.update_cell(cell.row, 2, telefono)
+    if correo is not None:
+        registro.update_cell(cell.row, 3, correo)
+    return True
+
+
+def delete_investor(gc, tier, nombre):
+    """Borra al inversionista del Registro Y borra su pestana completa de
+    apuestas (con su historial) - accion IRREVERSIBLE."""
+    sh = _open_tier_sheet(gc, tier)
+    registro = _get_or_create_registro(sh)
+    cell = registro.find(nombre, in_column=1)
+    if cell:
+        registro.delete_rows(cell.row)
+    try:
+        ws = sh.worksheet(nombre)
+        sh.del_worksheet(ws)
+    except Exception:
+        pass
+    return True
+
+
+def move_investor_tier(gc, from_tier, to_tier, nombre, nuevo_saldo=None):
+    """Mueve a un inversionista de un nivel a otro (ej. de $1,000 a
+    $3,000) - SOLO pasa cuando el usuario lo pide explicitamente aqui,
+    nunca automatico por que su saldo haya crecido o bajado. Su pestana
+    de historial en el nivel VIEJO se deja intacta (no se borra, queda
+    como registro), solo se quita del Registro viejo para que ya no
+    cuente como activo ahi. En el nivel NUEVO se crea su pestana con el
+    saldo inicial indicado (por default, su saldo actual del nivel
+    viejo)."""
+    if from_tier == to_tier:
+        raise ValueError("El nivel origen y destino son el mismo.")
+
+    sh_from = _open_tier_sheet(gc, from_tier)
+    registro_from = _get_or_create_registro(sh_from)
+    cell = registro_from.find(nombre, in_column=1)
+    if not cell:
+        raise ValueError(f"'{nombre}' no esta registrado en el nivel ${from_tier}.")
+    row_values = registro_from.row_values(cell.row)
+    telefono = row_values[1] if len(row_values) > 1 else ""
+    correo = row_values[2] if len(row_values) > 2 else ""
+
+    saldo_actual = nuevo_saldo if nuevo_saldo is not None else get_investor_balance(gc, from_tier, nombre)
+
+    sh_to = _open_tier_sheet(gc, to_tier)
+    registro_to = _get_or_create_registro(sh_to)
+    existentes = [r["Nombre"].strip().lower() for r in registro_to.get_all_records() if r.get("Nombre")]
+    if nombre.strip().lower() in existentes:
+        raise ValueError(f"'{nombre}' ya esta registrado en el nivel ${to_tier}.")
+    registro_to.append_row([nombre, telefono, correo])
+    ws_to = _get_or_create_investor_tab(sh_to, nombre)
+    values = ["", date.today().isoformat(), f"Traspaso desde nivel ${from_tier:,}",
+              "", saldo_actual, 0, round(saldo_actual, 2)]
+    _append_bet_row(ws_to, values)
+
+    registro_from.delete_rows(cell.row)
+    return True
+
+
+def log_movement(gc, tier, nombre, tipo, monto, fecha=None):
+    """Retiro o deposito de fondos FUERA de una apuesta (ej. el
+    inversionista retira ganancias y se queda solo con su monto nominal).
+    NO cambia de hoja/nivel al inversionista automaticamente - eso es una
+    decision manual del usuario (mover a alguien de nivel significa
+    borrarlo de una hoja y agregarlo en otra a mano). tipo: 'Retiro' o
+    'Deposito'."""
+    if tipo not in ("Retiro", "Deposito"):
+        raise ValueError("tipo debe ser 'Retiro' o 'Deposito'")
+    fecha = fecha or date.today().isoformat()
+
+    sh = _open_tier_sheet(gc, tier)
+    ws = _get_or_create_investor_tab(sh, nombre)
+    saldo_previo = get_investor_balance(gc, tier, nombre)
+
+    delta = -abs(monto) if tipo == "Retiro" else abs(monto)
+    saldo_nuevo = saldo_previo + delta
+
+    values = ["", fecha, tipo, "", monto, round(delta, 2), round(saldo_nuevo, 2)]
+    _append_bet_row(ws, values)
+    return dict(zip(BET_HEADERS, values))
+
+
 def get_investor_balance(gc, tier, nombre):
     """Saldo actual: la 'Inversion despues de apuesta' de la ULTIMA
     apuesta registrada, o el monto nominal del nivel si todavia no tiene

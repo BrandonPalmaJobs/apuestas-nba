@@ -32,6 +32,7 @@ if APP_DIR not in sys.path:
 
 import git_sync
 import nba_data as n
+import nba_investor_emails as ie
 import nba_investors as inv
 import nba_props_predict as pp
 import nba_report as r
@@ -600,7 +601,10 @@ def render_inversionistas():
         st.error(f"No se pudo conectar a Google Sheets: {e}")
         return
 
-    tab_apuesta, tab_alta, tab_ver = st.tabs(["Registrar apuesta", "Agregar inversionista", "Ver inversionistas"])
+    tab_apuesta, tab_mov, tab_alta, tab_editar, tab_nivel, tab_ver, tab_correo = st.tabs([
+        "Registrar apuesta", "Retiro / Deposito", "Agregar inversionista",
+        "Editar / Eliminar", "Cambiar de nivel", "Ver inversionistas", "Enviar correo (prueba)",
+    ])
 
     with tab_alta:
         with st.form("form_alta_inversionista"):
@@ -651,6 +655,104 @@ def render_inversionistas():
                 except Exception as e:
                     st.error(str(e))
 
+    with tab_mov:
+        st.caption("Retiro o deposito de fondos FUERA de una apuesta (ej. el inversionista retira "
+                   "ganancias y se queda con su monto nominal). NO cambia de nivel automaticamente "
+                   "- para eso usa la pestaña 'Cambiar de nivel'.")
+        with st.form("form_movimiento"):
+            tier_m = st.selectbox("Nivel", list(inv.TIER_SHEET_NAMES.keys()),
+                                   format_func=lambda x: f"${x:,}", key="mov_tier")
+            try:
+                investors_m = inv.list_investors(gc, tier_m)
+            except Exception as e:
+                investors_m = []
+                st.error(f"No se pudo leer el Sheet de ${tier_m:,}: {e}")
+            nombres_m = [i["nombre"] for i in investors_m]
+            inversionista_m = st.selectbox("Inversionista", nombres_m, key="mov_inv") if nombres_m else None
+            tipo_m = st.radio("Tipo", ["Retiro", "Deposito"], horizontal=True)
+            monto_m = st.number_input("Monto ($)", min_value=0.0, step=10.0)
+            submitted_m = st.form_submit_button("Registrar movimiento", type="primary", disabled=not nombres_m)
+        if submitted_m:
+            if not inversionista_m or monto_m <= 0:
+                st.error("Selecciona un inversionista y un monto mayor a 0.")
+            else:
+                try:
+                    row = inv.log_movement(gc, tier_m, inversionista_m, tipo_m, monto_m)
+                    st.success(f"{tipo_m} de ${monto_m:,.2f} registrado para {inversionista_m} - "
+                               f"saldo nuevo: ${row['Inversion despues de apuesta']:,.2f}")
+                except Exception as e:
+                    st.error(str(e))
+
+    with tab_editar:
+        st.caption("Editar telefono/correo, o eliminar por completo (borra tambien su pestaña de "
+                   "historial en el Sheet - accion irreversible).")
+        tier_e = st.selectbox("Nivel", list(inv.TIER_SHEET_NAMES.keys()),
+                               format_func=lambda x: f"${x:,}", key="edit_tier")
+        try:
+            investors_e = inv.list_investors(gc, tier_e)
+        except Exception as e:
+            investors_e = []
+            st.error(f"No se pudo leer el Sheet de ${tier_e:,}: {e}")
+        nombres_e = [i["nombre"] for i in investors_e]
+        inversionista_e = st.selectbox("Inversionista", nombres_e, key="edit_inv") if nombres_e else None
+
+        if inversionista_e:
+            datos = next(i for i in investors_e if i["nombre"] == inversionista_e)
+            with st.form("form_editar_inversionista"):
+                nuevo_tel = st.text_input("Telefono", value=datos["telefono"])
+                nuevo_correo = st.text_input("Correo", value=datos["correo"])
+                guardar = st.form_submit_button("Guardar cambios", type="primary")
+            if guardar:
+                try:
+                    inv.update_investor(gc, tier_e, inversionista_e, nuevo_tel.strip(), nuevo_correo.strip())
+                    st.success(f"{inversionista_e} actualizado.")
+                except Exception as e:
+                    st.error(str(e))
+
+            st.divider()
+            confirmar_borrar = st.checkbox(f"Entiendo que esto borra a {inversionista_e} y TODO su "
+                                            f"historial de apuestas, sin poder deshacerlo.")
+            if st.button("Eliminar inversionista", disabled=not confirmar_borrar):
+                try:
+                    inv.delete_investor(gc, tier_e, inversionista_e)
+                    st.success(f"{inversionista_e} eliminado del nivel ${tier_e:,}.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+
+    with tab_nivel:
+        st.caption("Mueve a un inversionista de un nivel a otro (ej. de $1,000 a $3,000) - solo pasa "
+                   "cuando tu lo pides aqui, nunca automatico por cambios de saldo. Su historial viejo "
+                   "se queda intacto en la hoja anterior, solo deja de contar ahi como activo.")
+        with st.form("form_cambiar_nivel"):
+            tier_origen = st.selectbox("Nivel actual", list(inv.TIER_SHEET_NAMES.keys()),
+                                        format_func=lambda x: f"${x:,}", key="nivel_origen")
+            try:
+                investors_n = inv.list_investors(gc, tier_origen)
+            except Exception as e:
+                investors_n = []
+                st.error(f"No se pudo leer el Sheet de ${tier_origen:,}: {e}")
+            nombres_n = [i["nombre"] for i in investors_n]
+            inversionista_n = st.selectbox("Inversionista", nombres_n, key="nivel_inv") if nombres_n else None
+            opciones_destino = [t for t in inv.TIER_SHEET_NAMES if t != tier_origen]
+            tier_destino = st.selectbox("Nuevo nivel", opciones_destino, format_func=lambda x: f"${x:,}")
+            usar_saldo_actual = st.checkbox("Usar su saldo actual como saldo inicial en el nuevo nivel",
+                                             value=True)
+            saldo_manual = None
+            if not usar_saldo_actual:
+                saldo_manual = st.number_input("Saldo inicial en el nuevo nivel ($)", min_value=0.0, step=10.0)
+            submitted_n = st.form_submit_button("Cambiar de nivel", type="primary", disabled=not nombres_n)
+        if submitted_n:
+            if not inversionista_n:
+                st.error("Selecciona un inversionista.")
+            else:
+                try:
+                    inv.move_investor_tier(gc, tier_origen, tier_destino, inversionista_n,
+                                            nuevo_saldo=saldo_manual)
+                    st.success(f"{inversionista_n} paso del nivel ${tier_origen:,} al nivel ${tier_destino:,}.")
+                except Exception as e:
+                    st.error(str(e))
+
     with tab_ver:
         tier3 = st.selectbox("Nivel", list(inv.TIER_SHEET_NAMES.keys()),
                               format_func=lambda x: f"${x:,}", key="view_tier")
@@ -666,6 +768,35 @@ def render_inversionistas():
             ganancia = saldo - tier3
             delta_txt = f"{'+' if ganancia >= 0 else ''}{ganancia:,.2f} desde el inicio"
             st.metric(i["nombre"], f"${saldo:,.2f}", delta=delta_txt)
+
+    with tab_correo:
+        st.caption("Manda ahora mismo (sin esperar a las 11:50pm) el reporte del dia de hoy a un "
+                   "inversionista, para probar el formato del correo.")
+        if not (st.secrets.get("GMAIL_ADDRESS") and st.secrets.get("GMAIL_APP_PASSWORD")):
+            st.warning(
+                "Faltan los secrets GMAIL_ADDRESS y GMAIL_APP_PASSWORD. Genera una contraseña de "
+                "aplicacion en myaccount.google.com/apppasswords (necesita verificacion en 2 pasos "
+                "activada) y agrega ambos secrets en Streamlit."
+            )
+        else:
+            tier_c = st.selectbox("Nivel", list(inv.TIER_SHEET_NAMES.keys()),
+                                   format_func=lambda x: f"${x:,}", key="correo_tier")
+            try:
+                investors_c = inv.list_investors(gc, tier_c)
+            except Exception as e:
+                investors_c = []
+                st.error(f"No se pudo leer el Sheet de ${tier_c:,}: {e}")
+            nombres_c = [i["nombre"] for i in investors_c]
+            inversionista_c = st.selectbox("Inversionista", nombres_c, key="correo_inv") if nombres_c else None
+            if inversionista_c:
+                datos_c = next(i for i in investors_c if i["nombre"] == inversionista_c)
+                st.caption(f"Correo: {datos_c['correo'] or 'N/D - agrega uno en Editar / Eliminar'}")
+                if st.button("Enviar reporte de hoy ahora", type="primary", disabled=not datos_c["correo"]):
+                    ok, msg = ie.send_daily_report(
+                        gc, tier_c, inversionista_c, datos_c["correo"],
+                        st.secrets["GMAIL_ADDRESS"], st.secrets["GMAIL_APP_PASSWORD"],
+                    )
+                    (st.success if ok else st.error)(msg)
 
 
 # ---------------------------------------------------------------------------
