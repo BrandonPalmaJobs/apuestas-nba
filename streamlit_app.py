@@ -338,8 +338,11 @@ def render_props_tab():
         c1, c2 = st.columns(2)
         equipo_jugador = c1.selectbox("Equipo del jugador", team_names, index=0)
         equipo_rival = c2.selectbox("Equipo rival", team_names, index=min(1, len(team_names) - 1))
-        season = st.number_input("Temporada (anio en que TERMINA)", value=n.current_nba_season(), step=1,
+        c3, c4 = st.columns(2)
+        season = c3.number_input("Temporada (anio en que TERMINA)", value=n.current_nba_season(), step=1,
                                   key="props_season")
+        window = c4.number_input("Ventana movil (juegos)", value=pp.WINDOW, step=1, min_value=3,
+                                  key="props_window")
         submitted = st.form_submit_button("Predecir", type="primary", use_container_width=True)
 
     if not submitted:
@@ -362,9 +365,9 @@ def render_props_tab():
 
     with st.spinner(f"Calculando historial reciente de {player_name}..."):
         try:
-            recent = pp.player_recent_games(team["espn_id"], player_id, int(season))
-            rep_team = r.team_side_report(team, opponent, int(season), pp.WINDOW)
-            rep_opp = r.team_side_report(opponent, team, int(season), pp.WINDOW)
+            recent = pp.player_recent_games(team["espn_id"], player_id, int(season), window=int(window))
+            rep_team = r.team_side_report(team, opponent, int(season), int(window))
+            rep_opp = r.team_side_report(opponent, team, int(season), int(window))
         finally:
             n.flush_cache()
 
