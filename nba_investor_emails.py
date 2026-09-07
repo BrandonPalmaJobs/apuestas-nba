@@ -58,7 +58,10 @@ def _stats_generales(gc, tier, nombre):
     total apostado - se calculan sobre el historial COMPLETO, no solo el
     dia de hoy."""
     historial = inv.get_full_history(gc, tier, nombre)
-    saldo_actual = inv.get_investor_balance(gc, tier, nombre)
+    # saldo actual = el saldo de la ULTIMA fila ya leida - se evita una
+    # segunda lectura completa de la pestana solo para el saldo (misma
+    # lógica que get_investor_balance, pero sin repetir la llamada).
+    saldo_actual = historial[-1]["saldo"] if historial else float(tier)
     ganancia_total = saldo_actual - tier
     apuestas = [h for h in historial if h["apuesta"] not in ("Retiro", "Deposito")]
     ganadas = [h for h in apuestas if h["ganada_perdida"] > 0]
@@ -304,14 +307,33 @@ def send_email(to_email, subject, body_text, body_html, gmail_address, gmail_app
         server.sendmail(gmail_address, to_email, msg.as_string())
 
 
+def _movimientos_de_hoy(historial, fecha):
+    """Filtra el historial YA leido (get_full_history, llaves
+    simplificadas) por fecha y lo regresa con los nombres de columna
+    originales del Sheet - para no tener que volver a leer la pestana
+    solo para sacar los movimientos de hoy (get_bets_for_date hacia una
+    lectura aparte de la misma info)."""
+    out = []
+    for h in historial:
+        if h["fecha"] != fecha:
+            continue
+        out.append({
+            "Partido al que se aposto": h["partido"], "Fecha en la que se aposto": h["fecha"],
+            "Apuesta que se realizo": h["apuesta"], "Momio en la que se tomo": h["momio"],
+            "Inversion actual": h["monto"], "Ganada / Perdida": h["ganada_perdida"],
+            "Inversion despues de apuesta": h["saldo"],
+        })
+    return out
+
+
 def send_daily_report(gc, tier, nombre, correo, gmail_address, gmail_app_password, fecha=None):
     """Arma y manda el correo de un inversionista para `fecha` (default
     hoy, hora de CDMX - no la hora del servidor). Regresa (enviado: bool,
     mensaje: str)."""
     fecha = fecha or inv.cdmx_today()
 
-    movimientos = inv.get_bets_for_date(gc, tier, nombre, fecha)
     stats = _stats_generales(gc, tier, nombre)
+    movimientos = _movimientos_de_hoy(stats["historial"], fecha)
 
     images = {}
     saldo_png = _render_saldo_chart(stats["historial"])
