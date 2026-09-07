@@ -131,6 +131,61 @@ def team_rolling_report(team, last_n, season):
     return per_game
 
 
+def probable_lineup(team, season, last_n=5, injured_names=None):
+    """Aproximacion de la alineacion titular probable: los 5 jugadores que
+    MAS seguido empezaron de titulares en los ultimos `last_n` juegos ya
+    jugados de este equipo, EXCLUYENDO a quien este reportado lesionado
+    ahora mismo (injured_names) - si el titular habitual esta lesionado, se
+    promueve al siguiente jugador con mas arranques recientes en su lugar,
+    en vez de solo marcarlo con una advertencia y dejarlo en la lista. La
+    NBA no publica una alineacion 'confirmada' con dias de anticipacion
+    como si lo hace MLB con el orden al bat (los titulares se confirman
+    horas antes del juego) - esto sigue siendo una inferencia a partir del
+    patron reciente, marcada como tal en el reporte, no una confirmacion
+    oficial."""
+    try:
+        games = n.espn_played_games(team["espn_id"], season=season, last_n=last_n)
+    except Exception as e:
+        print(f"    (no se pudo calcular alineacion probable: {e})", file=sys.stderr)
+        return None
+
+    counts = {}
+    names = {}
+    n_games_checked = 0
+    for g in games:
+        try:
+            roster = n.espn_game_roster(g["id"], team["espn_id"])
+        except Exception:
+            continue
+        n_games_checked += 1
+        for entry in roster:
+            if entry["starter"] and not entry["did_not_play"]:
+                pid = entry["player_id"]
+                counts[pid] = counts.get(pid, 0) + 1
+                names[pid] = entry["name"]
+    if not counts or not n_games_checked:
+        return None
+
+    injured_names = injured_names or []
+    ranked = sorted(counts.items(), key=lambda x: -x[1])
+
+    def _is_injured(name):
+        name_l = name.lower()
+        return any(name_l in inj or inj in name_l for inj in injured_names)
+
+    players = []
+    excluidos = []
+    for pid, c in ranked:
+        if _is_injured(names[pid]):
+            excluidos.append({"player_id": pid, "name": names[pid], "starts": c})
+            continue
+        players.append({"player_id": pid, "name": names[pid], "starts": c})
+        if len(players) == 5:
+            break
+
+    return {"players": players, "excluidos_por_lesion": excluidos, "n_games_checked": n_games_checked}
+
+
 def team_side_report(team, opponent, season, last_n, lesionado_override=None, as_of_date=None):
     per_game = team_rolling_report(team, last_n, season)
     if not per_game:
@@ -201,6 +256,14 @@ def team_side_report(team, opponent, season, last_n, lesionado_override=None, as
     except Exception as e:
         print(f"    (no se pudo descargar lista de lesionados: {e})", file=sys.stderr)
 
+    # injured_names alimenta la EXCLUSION dentro de probable_lineup (no solo
+    # una advertencia despues) - si el titular habitual esta en el reporte
+    # de lesionados, no debe aparecer como probable hasta que ya no este en
+    # esa lista (sin importar el status exacto: Out/Questionable/Day-to-Day
+    # todos cuentan como "lesionado" para efectos de la alineacion probable).
+    injured_names_lower = [inj.split(" (")[0].lower() for inj in injuries_auto]
+    lineup_probable = probable_lineup(team, season, injured_names=injured_names_lower)
+
     injury_impact = None
     if lesionado_override:
         try:
@@ -215,7 +278,7 @@ def team_side_report(team, opponent, season, last_n, lesionado_override=None, as
     return {
         "team": team, "opponent": opponent, "advanced": advanced,
         "quarter_profile": quarter_profile, "n_games": len(per_game),
-        "injuries_auto": injuries_auto,
+        "injuries_auto": injuries_auto, "lineup_probable": lineup_probable,
         "days_rest": days_rest, "is_b2b": is_b2b, "injury_impact": injury_impact,
     }
 
@@ -258,6 +321,19 @@ def print_team_block(rep, projection, quarters):
 
     alerta_b2b = " [BACK-TO-BACK]" if rep.get("is_b2b") else ""
     print(f"  Descanso: {rep.get('days_rest', 'N/D')} dia(s){alerta_b2b}")
+
+    lp = rep.get("lineup_probable")
+    if lp:
+        print(f"  Alineacion PROBABLE (mas titular en sus ultimos {lp['n_games_checked']} juegos, "
+              f"NO confirmada oficialmente, excluye lesionados):")
+        for p in lp["players"]:
+            print(f"    - {p['name']} (titular en {p['starts']}/{lp['n_games_checked']})")
+        if lp.get("excluidos_por_lesion"):
+            excl = ", ".join(f"{p['name']} ({p['starts']}/{lp['n_games_checked']})"
+                              for p in lp["excluidos_por_lesion"])
+            print(f"    (excluidos por lesion: {excl})")
+    else:
+        print("  Alineacion probable: N/D (sin juegos recientes suficientes).")
 
     if rep.get("injuries_auto"):
         print(f"  Lesionados (reporte de ESPN): {', '.join(rep['injuries_auto'][:8])}")

@@ -153,8 +153,26 @@ def render_team_block(rep, projection, quarters, col):
             alerta = " ⚠️ BACK-TO-BACK" if rep.get("is_b2b") else ""
             st.caption(f"Descanso: {rep['days_rest']} dia(s){alerta}")
 
+        lp = rep.get("lineup_probable")
+        if lp:
+            st.markdown(f"**Alineación probable** (más titular en sus últimos "
+                        f"{lp['n_games_checked']} juegos - NO confirmada oficialmente, "
+                        f"excluye lesionados):")
+            for p in lp["players"]:
+                st.caption(f"- {p['name']} (titular en {p['starts']}/{lp['n_games_checked']} juegos)")
+            if lp.get("excluidos_por_lesion"):
+                excl = ", ".join(f"{p['name']} ({p['starts']}/{lp['n_games_checked']})"
+                                  for p in lp["excluidos_por_lesion"])
+                st.caption(f"⚠️ Excluidos por lesión: {excl}")
+        else:
+            st.caption("Alineación probable: N/D (sin juegos recientes suficientes).")
+
         if rep.get("injuries_auto"):
-            st.caption("Lesionados (ESPN): " + ", ".join(rep["injuries_auto"][:6]))
+            st.markdown("**Lesionados (reporte de ESPN):**")
+            for inj in rep["injuries_auto"]:
+                st.caption(f"- {inj}")
+        else:
+            st.caption("Lesionados: ninguno reportado por ESPN ahora mismo (o no se pudo consultar).")
         if rep.get("injury_impact"):
             st.caption(f"LESIONADO forzado: {rep['injury_impact']['player']} - "
                        f"impacto On/Off: {rep['injury_impact']['raw']}")
