@@ -6,8 +6,8 @@
   },
   {
     "modelo": "Regresion lineal",
-    "mae": 15.3061,
-    "rmse": 19.4098
+    "mae": 15.2862,
+    "rmse": 19.4
   },
   {
     "modelo": "Gradient Boosting",
