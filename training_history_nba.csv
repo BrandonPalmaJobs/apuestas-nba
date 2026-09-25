@@ -6,3 +6,4 @@ timestamp,n_rows,modelo_total,mae_total,mae_total_baseline,modelo_margin,mae_mar
 2026-09-14T16:31:47,1156,Regresion lineal,15.3157,15.4129,Regresion lineal,12.4483,12.9567,Regresion logistica,0.1836,0.1908
 2026-09-18T14:14:45,1156,Regresion lineal,15.3039,15.4129,Regresion lineal,12.4289,12.9567,Regresion logistica,0.1834,0.1908
 2026-09-21T16:32:14,1156,Regresion lineal,15.3178,15.4129,Regresion lineal,12.4508,12.9567,Regresion logistica,0.1836,0.1908
+2026-09-25T15:14:40,1156,Regresion lineal,15.2877,15.4129,Regresion lineal,12.4512,12.9567,Regresion logistica,0.1838,0.1908

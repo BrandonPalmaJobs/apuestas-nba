@@ -5,3 +5,4 @@ timestamp,n_rows,n_players,modelo_points,mae_points,mae_points_baseline,modelo_r
 2026-09-14T17:31:21,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384
 2026-09-18T15:15:38,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384
 2026-09-21T17:33:54,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384
+2026-09-25T16:15:29,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384
