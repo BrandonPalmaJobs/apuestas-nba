@@ -21,6 +21,7 @@ inventarlos.
 
 import json
 import os
+import sys
 import time
 from datetime import date, datetime, timedelta
 
@@ -236,6 +237,32 @@ def espn_played_games(espn_team_id, season=None, last_n=None, request_delay=0.6)
             f"Ultimo error: {ultimo_error}. Espera unos minutos antes de reintentar - ESPN limita cuantas "
             f"solicitudes seguidas acepta.")
     games.sort(key=lambda g: g.get("date") or "")
+    return games
+
+
+def espn_recent_games(espn_team_id, season=None, last_n=10, request_delay=0.6):
+    """Como espn_played_games, pero si la temporada actual todavia no tiene
+    `last_n` juegos (arranque de temporada), completa la ventana con los
+    ULTIMOS juegos de la temporada anterior. Asi las predicciones funcionan
+    desde el dia 1 con una ventana completa, igual que el entrenamiento
+    (nba_train_data.collect_series_for_seasons). Conforme avanza la
+    temporada, los juegos viejos salen solos de la ventana.
+
+    Solo para predicciones - el entrenamiento recolecta temporadas completas
+    con espn_played_games directo."""
+    season = season or current_nba_season()
+    games = espn_played_games(espn_team_id, season=season, last_n=last_n, request_delay=request_delay)
+    missing = last_n - len(games) if last_n else 0
+    if missing > 0:
+        try:
+            prev = espn_played_games(espn_team_id, season=season - 1, last_n=missing,
+                                     request_delay=request_delay)
+        except Exception as e:
+            print(f"  No se pudo completar con la temporada anterior: {e}", file=sys.stderr)
+            prev = []
+        seen = {g["id"] for g in games}
+        games = [g for g in prev if g["id"] not in seen] + games
+        games.sort(key=lambda g: g.get("date") or "")
     return games
 
 

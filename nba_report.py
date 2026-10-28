@@ -180,7 +180,7 @@ def team_rolling_report(team, last_n, season):
     cae automaticamente al respaldo de pbpstats.com en vez de dejar el
     reporte sin datos."""
     try:
-        games = n.espn_played_games(team["espn_id"], season=season, last_n=last_n)
+        games = n.espn_recent_games(team["espn_id"], season=season, last_n=last_n)
     except Exception as e:
         print(f"  ESPN fallo para {team['full_name']} ({e}) - usando respaldo pbpstats.com...", file=sys.stderr)
         return _team_rolling_report_pbp_fallback(team, last_n, season)

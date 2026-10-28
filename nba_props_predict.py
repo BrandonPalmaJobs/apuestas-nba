@@ -29,7 +29,7 @@ def player_recent_games(team_espn_id, player_id, season, window=WINDOW, buffer=6
     DNP), mas recientes primero en la busqueda pero regresados en orden
     cronologico. `buffer` juegos extra por si el jugador se salto alguno
     (lesion, descanso) dentro de la ventana de juegos del equipo."""
-    games = n.espn_played_games(team_espn_id, season=season, last_n=window + buffer)
+    games = n.espn_recent_games(team_espn_id, season=season, last_n=window + buffer)
     out = []
     for g in reversed(games):
         if len(out) >= window:
