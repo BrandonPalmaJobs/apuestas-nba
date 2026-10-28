@@ -132,6 +132,123 @@ def evaluate_log(log_path="props_predictions_log.csv"):
     print(done[cols].to_string(index=False))
 
 
+# ---------------------------------------------------------------------------
+# Apuestas registradas (linea real + momio): la prueba de fuego del modelo.
+# El MAE dice si el modelo atina el numero; esto dice si GANA DINERO contra
+# las lineas reales de tu casa.
+# ---------------------------------------------------------------------------
+
+BETS_PATH = "props_bets_log.csv"
+BET_COLUMNS = [
+    "logged_at", "event_id", "game_date", "player_id", "player_name", "team", "team_espn_id", "opponent",
+    "stat", "line", "side", "odds", "pred", "model", "p_model", "p_needed", "edge",
+    "actual", "result", "profit_units", "evaluated",
+]
+STAT_LABELS = {"points": "Puntos", "rebounds": "Rebotes", "assists": "Asistencias"}
+
+
+def log_bet(row, log_path=BETS_PATH):
+    """Registra una apuesta. Si ya existe la misma (juego, jugador, stat), se
+    reemplaza: cuenta la ultima linea/lado que elegiste."""
+    from datetime import datetime
+    row = {**row, "logged_at": datetime.now().isoformat(timespec="seconds"),
+           "actual": None, "result": None, "profit_units": None, "evaluated": False}
+    if os.path.exists(log_path):
+        df = pd.read_csv(log_path)
+        same = ((df["event_id"].astype(str) == str(row["event_id"])) &
+                (df["player_id"].astype(str) == str(row["player_id"])) &
+                (df["stat"] == row["stat"]))
+        df = df[~same]
+    else:
+        df = pd.DataFrame(columns=BET_COLUMNS)
+    df = pd.concat([df, pd.DataFrame([{c: row.get(c) for c in BET_COLUMNS}])], ignore_index=True)
+    df.to_csv(log_path, index=False)
+
+
+def bet_profit(result, odds):
+    """Ganancia en UNIDADES apostando 1 unidad con momio americano."""
+    if result == "W":
+        return odds / 100 if odds > 0 else 100 / -odds
+    if result == "L":
+        return -1.0
+    return 0.0
+
+
+def settle(actual, line, side):
+    if actual is None or pd.isna(actual):
+        return "DNP"  # no jugo: la casa normalmente anula la apuesta
+    if actual == line:
+        return "P"
+    over_won = actual > line
+    return "W" if over_won == (side == "OVER") else "L"
+
+
+def evaluate_bets(log_path=BETS_PATH):
+    """Liquida las apuestas de juegos ya terminados. Regresa (df, resumen)."""
+    if not os.path.exists(log_path):
+        print("Todavia no hay apuestas registradas.")
+        return None, None
+    df = pd.read_csv(log_path, dtype={"result": "object", "evaluated": "object"})
+    df["actual"] = df["actual"].astype("float64")
+    df["profit_units"] = df["profit_units"].astype("float64")
+    df["evaluated"] = df["evaluated"].map(lambda v: str(v).lower() == "true")
+    for idx, row in df[~df["evaluated"]].iterrows():
+        if not is_game_final(row["event_id"]):
+            continue
+        try:
+            stats = n.espn_player_game_stats(row["event_id"], row["team_espn_id"], row["player_id"])
+        except Exception:
+            stats = {}
+        actual = stats.get(row["stat"]) if stats and stats.get("minutes") else None
+        result = settle(actual, float(row["line"]), row["side"])
+        df.loc[idx, "actual"] = actual
+        df.loc[idx, "result"] = result
+        df.loc[idx, "profit_units"] = bet_profit(result, float(row["odds"]))
+        df.loc[idx, "evaluated"] = True
+    df.to_csv(log_path, index=False)
+    summary = summarize_bets(df)
+    print_bets_summary(summary)
+    return df, summary
+
+
+def summarize_bets(df):
+    evaluated = df["evaluated"].map(lambda v: str(v).lower() == "true")
+    done = df[evaluated & df["result"].isin(["W", "L", "P"])].copy()
+    if done.empty:
+        return None
+
+    def block(d):
+        w, l, p = (d["result"] == "W").sum(), (d["result"] == "L").sum(), (d["result"] == "P").sum()
+        units = d["profit_units"].astype(float).sum()
+        return {"apuestas": len(d), "ganadas": int(w), "perdidas": int(l), "push": int(p),
+                "acierto": w / (w + l) if (w + l) else None, "unidades": round(units, 2),
+                "roi": units / len(d) if len(d) else None}
+
+    out = {"total": block(done)}
+    for stat, label in STAT_LABELS.items():
+        d = done[done["stat"] == stat]
+        if len(d):
+            out[label] = block(d)
+    d = done[done["edge"].astype(float) > 0]
+    if len(d):
+        out["Con ventaja segun el modelo"] = block(d)
+    d = done[done["edge"].astype(float) <= 0]
+    if len(d):
+        out["Sin ventaja segun el modelo"] = block(d)
+    return out
+
+
+def print_bets_summary(summary):
+    if not summary:
+        print("Todavia no hay apuestas liquidadas.")
+        return
+    print("\n--- Apuestas registradas (1 unidad cada una) ---")
+    for name, b in summary.items():
+        acierto = f"{b['acierto']:.1%}" if b["acierto"] is not None else "N/D"
+        print(f"{name}: {b['ganadas']}-{b['perdidas']}-{b['push']} ({acierto}) | "
+              f"{b['unidades']:+.2f} u | ROI {b['roi']:+.1%}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Evalua las predicciones de props logueadas contra el resultado real")
     parser.add_argument("--log-path", default="props_predictions_log.csv")
@@ -140,6 +257,7 @@ def main():
     if args.evaluate:
         try:
             evaluate_log(args.log_path)
+            evaluate_bets()
         finally:
             n.flush_cache()
     else:

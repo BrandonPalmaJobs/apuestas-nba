@@ -424,7 +424,14 @@ def _compute_props(jugador, equipo_jugador, equipo_rival, season, window, log_th
         return None
 
     is_home = str(matchup.get("home_espn_id")) == str(team["espn_id"]) if matchup else None
-    row = pp.build_props_row(recent, rep_team, rep_opp, is_home=is_home)
+    with st.spinner("Revisando que tanto permite el rival a jugadores de su posicion..."):
+        try:
+            opp_allowed = pp.opp_allowed_by_position(opponent, season, pp.pdata.main_group(recent), window=window)
+        except Exception:
+            opp_allowed = None
+        finally:
+            n.flush_cache()
+    row = pp.build_props_row(recent, rep_team, rep_opp, is_home=is_home, opp_allowed=opp_allowed)
 
     preds = {}
     for stat, bundle in bundles.items():
@@ -456,7 +463,27 @@ def _compute_props(jugador, equipo_jugador, equipo_rival, season, window, log_th
         "recent": [{k: g[k] for k in ("points", "rebounds", "assists")} for g in recent],
         "days_rest": rep_team.get("days_rest"), "is_b2b": rep_team.get("is_b2b"),
         "preds": preds,
+        # Datos del juego real (para registrar apuestas); None si no hay
+        # partido programado entre estos dos equipos.
+        "game": {"event_id": matchup["event_id"], "game_date": matchup["date"], "player_id": player_id,
+                 "team_espn_id": team["espn_id"]} if matchup else None,
     }
+
+
+def _register_bet(res, stat, p, line, side, momio, ou):
+    p_side = ou["p_over"] if side == "OVER" else ou["p_under"]
+    p_needed = pp.american_to_prob(momio)
+    pt.log_bet({
+        **res["game"], "player_name": res["player_name"], "team": res["team"], "opponent": res["opponent"],
+        "stat": stat, "line": line, "side": side, "odds": momio,
+        "pred": round(p["pred"], 2), "model": p["model_name"],
+        "p_model": round(p_side, 4), "p_needed": round(p_needed, 4), "edge": round(p_side - p_needed, 4),
+    }, log_path=os.path.join(APP_DIR, pt.BETS_PATH))
+    ok, msg = git_sync.commit_and_push([pt.BETS_PATH], f"Apuesta registrada: {res['player_name']} {stat} "
+                                       f"{side} {line}", st.secrets, APP_DIR)
+    label = pt.STAT_LABELS[stat].lower()
+    st.toast(f"Registrada: {res['player_name']} {side.lower()} {line} {label} ({momio:+d})"
+             + ("" if ok else " - ojo: no se pudo guardar en GitHub"))
 
 
 def _render_props_result(res, run_id):
@@ -499,6 +526,12 @@ def _render_props_result(res, run_id):
             else:
                 st.caption(f"Sin ventaja: lo mejor es {ou['pick']} {ou['p_pick']:.0%}, "
                            f"el momio pide {ou['p_needed']:.0%}")
+            if res.get("game"):
+                b1, b2 = st.columns(2)
+                for btn, side in ((b1, "OVER"), (b2, "UNDER")):
+                    if btn.button(f"Aposte {side.lower()}", key=f"bet_{stat}_{side}_{run_id}",
+                                  use_container_width=True):
+                        _register_bet(res, stat, p, line, side, momio, ou)
 
 
 # ---------------------------------------------------------------------------
@@ -543,6 +576,37 @@ def render_evaluar():
             st.secrets, APP_DIR,
         )
         (st.success if ok else st.warning)(msg)
+
+    st.divider()
+    st.header("💰 Apuestas de props registradas")
+    st.caption("Las que marcaste con 'Aposte over/under' en la pestana Props, contra el resultado real. "
+               "Es la medida que importa: si el modelo te deja dinero contra las lineas de tu casa.")
+    bets_path = os.path.join(APP_DIR, pt.BETS_PATH)
+    if st.button("Liquidar apuestas terminadas", type="primary"):
+        with st.spinner("Revisando resultados..."):
+            try:
+                pt.evaluate_bets(bets_path)
+            finally:
+                n.flush_cache()
+        ok, msg = git_sync.commit_and_push([pt.BETS_PATH], f"Liquida apuestas de props {date.today().isoformat()}",
+                                           st.secrets, APP_DIR)
+        (st.success if ok else st.warning)(msg)
+    if os.path.exists(bets_path):
+        bets = pd.read_csv(bets_path)
+        summary = pt.summarize_bets(bets)
+        if summary:
+            st.dataframe(pd.DataFrame([
+                {"Grupo": k, "Record (G-P-Push)": f"{b['ganadas']}-{b['perdidas']}-{b['push']}",
+                 "Acierto": f"{b['acierto']:.1%}" if b["acierto"] is not None else "N/D",
+                 "Unidades": f"{b['unidades']:+.2f}", "ROI": f"{b['roi']:+.1%}"}
+                for k, b in summary.items()]), hide_index=True, use_container_width=True)
+            st.caption("Para salir ganando con momio -110 necesitas acertar mas de 52.4%. "
+                       "Con menos de ~100 apuestas, el resultado todavia es mayormente suerte.")
+        st.dataframe(bets[["game_date", "player_name", "stat", "side", "line", "odds", "p_model", "edge",
+                           "actual", "result", "profit_units"]].tail(50), hide_index=True,
+                     use_container_width=True)
+    else:
+        st.info("Todavia no hay apuestas registradas.")
 
     if os.path.exists(props_log_path):
         st.subheader("Historial de predicciones de props")

@@ -22,6 +22,7 @@ import joblib
 import pandas as pd
 
 import nba_data as n
+import nba_props_data as pdata
 import nba_props_train as ptr
 import nba_props_track as pt
 import nba_report as r
@@ -55,12 +56,41 @@ def player_recent_games(team_espn_id, player_id, season, window=WINDOW, buffer=6
         out.append({
             "date": g["date"], "points": stats.get("points"), "rebounds": stats.get("rebounds"),
             "assists": stats.get("assists"), "minutes": stats.get("minutes"),
+            "starter": bool(entry["starter"]), "group": n.position_group(entry),
         })
     out.reverse()
     return out
 
 
-def build_props_row(recent, rep_team, rep_opp, is_home=None):
+def opp_allowed_by_position(opponent, season, group, window=WINDOW):
+    """Version en vivo de nba_props_data.opp_allowed_asof: lo que la defensa
+    de `opponent` le permitio a titulares del grupo de posicion `group` en
+    sus ultimos `window` juegos (por 36 min). ~60 llamadas a ESPN la primera
+    vez; las stats quedan en cache."""
+    if not group:
+        return None
+    entries = []
+    for g in n.espn_recent_games(opponent["espn_id"], season=season, last_n=window):
+        other = g["opponent_espn_id"]
+        try:
+            roster = n.espn_game_roster(g["id"], other)
+        except Exception:
+            continue
+        for entry in roster:
+            if not entry["starter"] or entry["did_not_play"]:
+                continue
+            try:
+                stats = n.espn_player_game_stats(g["id"], other, entry["player_id"])
+            except Exception:
+                continue
+            if stats and stats.get("minutes"):
+                entries.append({"group": n.position_group(entry), "minutes": stats["minutes"],
+                                "points": stats.get("points"), "rebounds": stats.get("rebounds"),
+                                "assists": stats.get("assists")})
+    return pdata.allowed_per36(entries, group)
+
+
+def build_props_row(recent, rep_team, rep_opp, is_home=None, opp_allowed=None):
     """Fila de features para los modelos de props - la MISMA para el CLI y la
     app de Streamlit, y con las mismas columnas que arma nba_props_data.py
     al entrenar (las que un modelo viejo no use simplemente se ignoran)."""
@@ -76,6 +106,10 @@ def build_props_row(recent, rep_team, rep_opp, is_home=None):
         "teammates_out": rep_team.get("missing_regulars"),
         "proj_margin": proj_margin,
         "proj_blowout": abs(proj_margin) if proj_margin is not None else None,
+        "start_rate": r._avg([1.0 if g.get("starter") else 0.0 for g in recent]),
+        "opp_allow_pts36_pos": (opp_allowed or {}).get("points"),
+        "opp_allow_reb36_pos": (opp_allowed or {}).get("rebounds"),
+        "opp_allow_ast36_pos": (opp_allowed or {}).get("assists"),
     }
     for stat in ("points", "rebounds", "assists", "minutes"):
         row[f"avg_{stat}"] = r._avg([g[stat] for g in recent])
@@ -153,7 +187,11 @@ def main():
         return
 
     is_home = str(matchup.get("home_espn_id")) == str(team["espn_id"]) if matchup else None
-    row = build_props_row(recent, rep_team, rep_opp, is_home=is_home)
+    try:
+        opp_allowed = opp_allowed_by_position(opponent, season, pdata.main_group(recent), window=args.window)
+    finally:
+        n.flush_cache()
+    row = build_props_row(recent, rep_team, rep_opp, is_home=is_home, opp_allowed=opp_allowed)
 
     game_summaries = [f"{g['points']:.0f}p/{g['rebounds']:.0f}r/{g['assists']:.0f}a" for g in recent]
     print(f"Ultimos {len(recent)} juegos: {', '.join(game_summaries)}\n")

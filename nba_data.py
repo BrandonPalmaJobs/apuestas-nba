@@ -351,13 +351,56 @@ def espn_game_roster(event_id, espn_team_id):
                      f"/competitors/{espn_team_id}/roster", params={"limit": 30})
     out = []
     for entry in data.get("entries", []):
+        pos = entry.get("position") or {}
         out.append({
             "player_id": entry.get("playerId"),
             "name": entry.get("displayName"),
             "starter": bool(entry.get("starter")),
             "did_not_play": bool(entry.get("didNotPlay")),
+            # La posicion puede venir directa (abbreviation) o como $ref a
+            # otro recurso de ESPN - position_group() resuelve ambos casos.
+            "position_abbr": pos.get("abbreviation"),
+            "position_ref": pos.get("$ref"),
         })
     return out
+
+
+# Grupos de posicion para "defensa del rival por posicion": bases/escoltas,
+# aleros y grandes. Tres grupos en vez de cinco posiciones para tener
+# suficientes jugadores por grupo en una ventana de 10 juegos.
+_POSITION_GROUPS = {
+    "PG": "G", "SG": "G", "G": "G",
+    "SF": "W", "GF": "W", "F": "W",
+    "PF": "B", "C": "B", "FC": "B", "CF": "B",
+}
+
+
+def position_group(roster_entry):
+    """'G' (base/escolta), 'W' (alero) o 'B' (grande) para una entrada de
+    espn_game_roster - None si ESPN no trae la posicion. Si solo viene la
+    referencia ($ref), se pide UNA vez por posicion y se cachea en disco."""
+    global _cache_dirty
+    abbr = roster_entry.get("position_abbr")
+    ref = roster_entry.get("position_ref")
+    if not abbr and ref:
+        cache = _load_summary_cache()
+        key = f"pos:{ref.split('?')[0]}"
+        if key not in cache:
+            try:
+                cache[key] = get_json(ref).get("abbreviation")
+            except Exception:
+                return None
+            _cache_dirty = True
+        abbr = cache[key]
+    if not abbr:
+        return None
+    return _POSITION_GROUPS.get(str(abbr).upper().replace("-", ""))
+
+
+def player_stats_cached(event_id, espn_team_id, player_id):
+    """True si las stats de ese jugador en ese juego ya estan en el cache de
+    disco (no cuesta ninguna llamada a ESPN)."""
+    return f"pstats:{event_id}:{espn_team_id}:{player_id}" in _load_summary_cache()
 
 
 def espn_player_game_stats(event_id, espn_team_id, player_id):

@@ -36,7 +36,10 @@ FEATURES = ["avg_points", "avg_rebounds", "avg_assists", "avg_minutes",
             "days_rest", "b2b",
             # Contexto de minutos/uso: local o visita, companeros habituales
             # ausentes, y margen proyectado (las palizas recortan minutos).
-            "is_home", "teammates_out", "proj_margin", "proj_blowout"]
+            "is_home", "teammates_out", "proj_margin", "proj_blowout",
+            # Rol (que tanto arranca de titular) y lo que la defensa rival le
+            # permite a titulares de su misma posicion, por 36 minutos.
+            "start_rate", "opp_allow_pts36_pos", "opp_allow_reb36_pos", "opp_allow_ast36_pos"]
 
 
 def over_threshold(line):

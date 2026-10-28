@@ -14,7 +14,9 @@ Cada fila = UN jugador en UN juego real ya jugado:
     point-in-time, nunca el resultado del juego que se esta prediciendo.
   - labels: lo que de verdad anoto/rebot/asistio en ESE juego.
 
-Simplificacion conocida (documentada, no oculta): solo se incluyen
+(Antes solo se incluian titulares; desde oct-2026 entran tambien los
+suplentes con 12+ minutos promedio - ver collect_player_games. Nota
+historica de la version anterior:) solo se incluian
 jugadores que EMPEZARON (starter=True) en ese juego especifico - es un
 proxy barato de "juega minutos consistentes" sin tener que descargar
 estadisticas de TODO el roster (30+ jugadores por equipo) para despues
@@ -39,39 +41,99 @@ import nba_data as n
 import nba_train_data as td
 
 
-def build_player_rows(team, season, all_team_series, window, min_prior, max_games=None, verbose=True):
-    team_series = all_team_series[str(team["espn_id"])]
-    event_to_idx = {g["event_id"]: i for i, g in enumerate(team_series)}
-    games = team_series if max_games is None else team_series[-max_games:]
+# Jugadores con menos minutos promedio que esto no generan filas: sus
+# lineas casi no existen en las casas y su produccion es puro ruido.
+MIN_AVG_MINUTES = 12
 
-    player_games = {}
+
+def collect_player_games(team, team_series, max_games=None, bench_deadline=None):
+    """Juego por juego de cada jugador del equipo que SI jugo (titulares Y
+    suplentes), con su grupo de posicion y si arranco.
+
+    Suplentes: son ~2x mas llamadas a ESPN que los titulares, asi que solo se
+    piden sus stats si ya estan en cache o si queda tiempo antes de
+    `bench_deadline` (time.time()). El cache se sube a GitHub con cada
+    reentrenamiento, asi que en pocas corridas se completa solo sin pasarse
+    del limite de tiempo de GitHub Actions.
+
+    Regresa (player_games, starters_by_event): el segundo es la lista de
+    titulares de ESTE equipo en cada juego, con su produccion - es lo que
+    "permitio" el rival, para la defensa por posicion."""
+    games = team_series if max_games is None else team_series[-max_games:]
+    player_games, starters_by_event = {}, {}
     for g in games:
         try:
             roster = n.espn_game_roster(g["event_id"], team["espn_id"])
         except Exception as e:
             print(f"    [salteado] roster {g['event_id']} ({team['abbreviation']}): {e}", file=sys.stderr)
             continue
+        starters = []
         for entry in roster:
-            if entry["did_not_play"] or not entry["starter"]:
+            if entry["did_not_play"]:
                 continue
             pid = entry["player_id"]
+            if not entry["starter"] and bench_deadline is not None and time.time() > bench_deadline \
+                    and not n.player_stats_cached(g["event_id"], team["espn_id"], pid):
+                continue
             try:
                 stats = n.espn_player_game_stats(g["event_id"], team["espn_id"], pid)
             except Exception as e:
                 print(f"    [salteado] stats jugador {pid} juego {g['event_id']}: {e}", file=sys.stderr)
                 continue
-            if not stats or stats.get("minutes") is None:
+            if not stats or not stats.get("minutes"):
                 continue
-            player_games.setdefault(pid, {"name": entry["name"], "games": []})
-            player_games[pid]["games"].append({
+            group = n.position_group(entry)
+            pg = {
                 "event_id": g["event_id"], "date": g["date"],
                 "points": stats.get("points"), "rebounds": stats.get("rebounds"),
                 "assists": stats.get("assists"), "minutes": stats.get("minutes"),
-            })
+                "starter": bool(entry["starter"]), "group": group,
+            }
+            player_games.setdefault(pid, {"name": entry["name"], "games": []})["games"].append(pg)
+            if entry["starter"]:
+                starters.append(pg)
+        starters_by_event[(str(g["event_id"]), str(team["espn_id"]))] = starters
+    return player_games, starters_by_event
+
+
+def main_group(pgames):
+    """Grupo de posicion mas frecuente del jugador (None si ESPN nunca lo trajo)."""
+    groups = [x["group"] for x in pgames if x.get("group")]
+    return max(set(groups), key=groups.count) if groups else None
+
+
+def allowed_per36(entries, group):
+    """Puntos/rebotes/asistencias por 36 minutos que lograron los titulares de
+    `group` en `entries` (lo que permitio una defensa). None si hay muy pocos
+    minutos para que el numero signifique algo."""
+    sel = [e for e in entries if e.get("group") == group and e.get("minutes")]
+    mins = sum(e["minutes"] for e in sel)
+    if mins < 60:
+        return None
+    return {stat: sum((e.get(stat) or 0) for e in sel) / mins * 36 for stat in ("points", "rebounds", "assists")}
+
+
+def opp_allowed_asof(opp_id, opp_series, before_date, window, starters_index, group):
+    """Lo que la defensa del rival le permitio a titulares del grupo de
+    posicion `group` en sus ultimos `window` juegos ANTES de before_date."""
+    if not group or not opp_series:
+        return None
+    prior = [g for g in opp_series if g["date"] and g["date"] < before_date][-window:]
+    entries = []
+    for g in prior:
+        entries.extend(starters_index.get((str(g["event_id"]), str(g["opponent_espn_id"])), []))
+    return allowed_per36(entries, group)
+
+
+def build_player_rows(team, season, all_team_series, player_games, starters_index, window, min_prior,
+                      verbose=True):
+    team_series = all_team_series[str(team["espn_id"])]
+    event_to_idx = {g["event_id"]: i for i, g in enumerate(team_series)}
 
     rows = []
     for pid, info in player_games.items():
         pgames = info["games"]
+        group = main_group(pgames)
         for i, pg in enumerate(pgames):
             if i < min_prior:
                 continue
@@ -81,6 +143,8 @@ def build_player_rows(team, season, all_team_series, window, min_prior, max_game
             avg_assists = td.r._avg([x["assists"] for x in prior])
             avg_minutes = td.r._avg([x["minutes"] for x in prior])
             if None in (avg_points, avg_rebounds, avg_assists, avg_minutes):
+                continue
+            if avg_minutes < MIN_AVG_MINUTES:
                 continue
 
             i_team = event_to_idx.get(pg["event_id"])
@@ -98,10 +162,6 @@ def build_player_rows(team, season, all_team_series, window, min_prior, max_game
             if opp_feats is None:
                 continue
 
-            # Descanso del EQUIPO (no del jugador especificamente - ESPN no
-            # trae minutos de descanso individuales por lesion/rotacion) de
-            # cara a este juego: dias desde el juego anterior del equipo.
-            # Point-in-time (solo mira el juego previo, nunca el actual).
             days_rest = None
             if i_team > 0:
                 days_rest = td.rest_days(team_series[i_team - 1]["date"], pg["date"])
@@ -116,19 +176,25 @@ def build_player_rows(team, season, all_team_series, window, min_prior, max_game
             teammates_out = len(regulars & g_team.get("dnp_ids", set()))
             last3 = prior[-3:]
             proj_margin = td.r.matchup_margin(team_feats, opp_feats)
+            allowed = opp_allowed_asof(opp_id, opp_series, pg["date"], window, starters_index, group) or {}
 
             rows.append({
                 "event_id": pg["event_id"], "date": pg["date"],
                 "season": g_team.get("season", season),
                 "player_id": pid, "player_name": info["name"], "team": team["abbreviation"],
+                "position_group": group,
                 "avg_points": avg_points, "avg_rebounds": avg_rebounds,
                 "avg_assists": avg_assists, "avg_minutes": avg_minutes,
                 "avg_points_last3": td.r._avg([x["points"] for x in last3]),
                 "avg_rebounds_last3": td.r._avg([x["rebounds"] for x in last3]),
                 "avg_assists_last3": td.r._avg([x["assists"] for x in last3]),
                 "avg_minutes_last3": td.r._avg([x["minutes"] for x in last3]),
+                "start_rate": sum(x["starter"] for x in prior) / len(prior),
                 "team_off_rtg": team_feats["off_rtg"], "team_pace": team_feats["pace"],
                 "opp_def_rtg": opp_feats["def_rtg"], "opp_pace": opp_feats["pace"],
+                "opp_allow_pts36_pos": allowed.get("points"),
+                "opp_allow_reb36_pos": allowed.get("rebounds"),
+                "opp_allow_ast36_pos": allowed.get("assists"),
                 "days_rest": days_rest, "b2b": b2b,
                 "is_home": int(bool(g_team.get("is_home"))),
                 "teammates_out": teammates_out,
@@ -139,25 +205,39 @@ def build_player_rows(team, season, all_team_series, window, min_prior, max_game
                 "label_assists": pg["assists"], "label_minutes": pg["minutes"],
             })
     if verbose:
-        print(f"  {team['full_name']}: {len(player_games)} jugadores titulares, "
+        n_starters = sum(1 for info in player_games.values() if any(x["starter"] for x in info["games"]))
+        print(f"  {team['full_name']}: {len(player_games)} jugadores ({n_starters} titulares alguna vez), "
               f"{len(rows)} filas de props", file=sys.stderr)
     return rows
 
 
 def collect_props_dataset(season, team_names=None, window=10, min_prior=5, max_games=None, verbose=True,
-                          seasons=None):
+                          seasons=None, bench_budget_min=90):
     """seasons: lista de temporadas a unir (ej. [2026, 2027]) - ver
-    nba_train_data.collect_series_for_seasons."""
+    nba_train_data.collect_series_for_seasons. bench_budget_min: minutos
+    maximos para pedir stats NUEVAS de suplentes (ver collect_player_games);
+    None = sin limite."""
     teams = n.TEAMS
     if team_names:
         teams = [n.resolve_team(name) for name in team_names]
     all_team_series = td.collect_series_for_seasons(teams, seasons or [season], max_games=max_games,
                                                     verbose=verbose)
 
+    bench_deadline = time.time() + bench_budget_min * 60 if bench_budget_min is not None else None
+    player_games_by_team, starters_index = {}, {}
+    for team in teams:
+        pg, st = collect_player_games(team, all_team_series[str(team["espn_id"])], max_games=max_games,
+                                      bench_deadline=bench_deadline)
+        player_games_by_team[str(team["espn_id"])] = pg
+        starters_index.update(st)
+    if bench_deadline is not None and time.time() > bench_deadline:
+        print("  AVISO: se acabo el tiempo para suplentes nuevos - los que falten se completan en las "
+              "siguientes corridas (el cache se guarda).", file=sys.stderr)
+
     all_rows = []
     for team in teams:
-        rows = build_player_rows(team, season, all_team_series, window, min_prior, max_games=max_games)
-        all_rows.extend(rows)
+        all_rows.extend(build_player_rows(team, season, all_team_series, player_games_by_team[str(team["espn_id"])],
+                                          starters_index, window, min_prior, verbose=verbose))
     return pd.DataFrame(all_rows)
 
 
@@ -172,6 +252,9 @@ def main():
                          help="Minimo de juegos previos para confiar en el promedio movil (default 5)")
     parser.add_argument("--seasons", default=None,
                          help="Varias temporadas separadas por coma, ej. '2026,2027'. Tiene prioridad sobre --season")
+    parser.add_argument("--bench-budget-min", type=float, default=90,
+                         help="Minutos maximos para descargar stats NUEVAS de suplentes (default 90; "
+                              "lo ya cacheado no cuenta). Usa -1 para sin limite")
     parser.add_argument("--out", default="training_data_props.csv")
     parser.add_argument("--max-games", type=int, default=None,
                          help="Solo para pruebas rapidas: limita a los ultimos N juegos por equipo")
@@ -181,7 +264,8 @@ def main():
     team_names = [t.strip() for t in args.teams.split(",")] if args.teams else None
     try:
         df = collect_props_dataset(season, team_names=team_names, window=args.window, min_prior=args.min_prior,
-                                    max_games=args.max_games, seasons=td.parse_seasons(args.seasons, season))
+                                    max_games=args.max_games, seasons=td.parse_seasons(args.seasons, season),
+                                    bench_budget_min=None if args.bench_budget_min < 0 else args.bench_budget_min)
     finally:
         n.flush_cache()
 
