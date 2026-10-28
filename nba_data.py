@@ -509,16 +509,17 @@ def player_boxscores(event_id):
 def espn_team_season_roster(espn_team_id, season=None):
     """Roster COMPLETO del equipo para una temporada (no un juego
     especifico) - para resolver el nombre de un jugador a su ID antes de
-    poder pedir su historial de juegos (props de jugador, Fase 3). Se
-    cachea en disco: el roster no cambia seguido dentro de una temporada, y
-    si cambia un poco por un trade no es grave que quede desactualizado
-    unos dias."""
+    poder pedir su historial de juegos y para saber quien SIGUE en el equipo
+    (los cambios de equipo, firmas y cortes). Se cachea en disco maximo
+    ROSTER_MAX_HOURS: antes se guardaba para siempre y no se enteraba de los
+    movimientos del mercado."""
     global _cache_dirty
     cache = _load_summary_cache()
     season = season or current_nba_season()
     key = f"roster_season:{espn_team_id}:{season}"
-    if key in cache:
-        return cache[key]
+    cached = cache.get(key)
+    if isinstance(cached, dict) and time.time() - cached.get("fetched", 0) < ROSTER_MAX_HOURS * 3600:
+        return cached["players"]
     data = get_json(f"{ESPN_CORE_BASE}/seasons/{season}/teams/{espn_team_id}/athletes", params={"limit": 50})
     out = []
     for item in data.get("items", []):
@@ -528,9 +529,25 @@ def espn_team_season_roster(espn_team_id, season=None):
         except Exception:
             continue
         out.append({"player_id": detail.get("id"), "name": detail.get("displayName")})
-    cache[key] = out
-    _cache_dirty = True
+    if out:
+        cache[key] = {"fetched": time.time(), "players": out}
+        _cache_dirty = True
     return out
+
+
+ROSTER_MAX_HOURS = 12
+
+
+def current_roster_ids(espn_team_id):
+    """IDs (texto) de quienes estan HOY en el roster del equipo - None si no
+    se pudo consultar (en ese caso no se filtra nada)."""
+    try:
+        roster = espn_team_season_roster(espn_team_id)
+    except Exception as e:
+        print(f"  no se pudo consultar el roster actual ({e})", file=sys.stderr)
+        return None
+    ids = {str(p["player_id"]) for p in roster if p.get("player_id")}
+    return ids or None
 
 
 def resolve_player_espn(espn_team_id, name_query, season=None):

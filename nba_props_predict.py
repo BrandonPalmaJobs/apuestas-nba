@@ -97,6 +97,11 @@ def team_players_recent_games(team_espn_id, season, window=WINDOW, buffer=4, on_
                 info["games"].append(_game_entry(g, entry, stats))
     for info in players.values():
         info["games"].reverse()
+    # Solo quien SIGUE en el equipo: al arranque de temporada la ventana trae
+    # juegos de la temporada pasada, con jugadores que ya se fueron.
+    roster = n.current_roster_ids(team_espn_id)
+    if roster:
+        players = {pid: info for pid, info in players.items() if pid in roster}
     return players
 
 
