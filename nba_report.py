@@ -319,6 +319,9 @@ def team_side_report(team, opponent, season, last_n, lesionado_override=None, as
         days_rest = (ref_date - last_dt).days
         is_b2b = days_rest <= 1
 
+    season_feats = team_season_features(
+        [{"season": e.get("season"), "advanced": adv} for e, adv, _ in per_game], season)
+
     # Lesionados actuales de ESPN (roster + status) - solo informativo, para
     # saber a quien vale la pena forzar con --lesionado-a/-b (el impacto
     # numerico via On/Off solo se calcula para el jugador forzado, no para
@@ -360,15 +363,50 @@ def team_side_report(team, opponent, season, last_n, lesionado_override=None, as
     # nba_train_data.py (ahi se mide retrospectivamente quien de la rotacion
     # habitual NO jugo en cada juego historico, en vez de depender de un
     # reporte de lesionados dia-por-dia que no existe publicamente).
-    missing_regulars = len(lineup_probable["excluidos_por_lesion"]) if lineup_probable else None
+    # Solo cuentan los que de verdad no juegan (Out/Doubtful/Suspension): un
+    # Questionable o Day-To-Day casi siempre termina jugando.
+    status_by_name = {inj.split(" (")[0].lower(): inj.lower() for inj in injuries_auto}
+    def _is_out(name):
+        st_ = status_by_name.get(str(name).lower(), "")
+        return any(x in st_ for x in ("(out", "(doubtful", "(susp"))
+    missing_regulars = (sum(1 for nm in lineup_probable["excluidos_por_lesion"] if _is_out(nm))
+                        if lineup_probable else None)
 
     return {
         "team": team, "opponent": opponent, "advanced": advanced,
         "quarter_profile": quarter_profile, "n_games": len(per_game),
         "injuries_auto": injuries_auto, "lineup_probable": lineup_probable,
         "days_rest": days_rest, "is_b2b": is_b2b, "injury_impact": injury_impact,
-        "missing_regulars": missing_regulars,
+        "missing_regulars": missing_regulars, "season_feats": season_feats,
     }
+
+
+# Metricas que tambien se promedian SOLO con juegos de esta temporada, para
+# que el modelo de equipo le de prioridad a la temporada actual cuando la
+# ventana todavia trae juegos de la pasada (arranque de temporada).
+SEASON_KEYS = ["off_rtg", "def_rtg", "net_rtg", "pace"]
+
+
+def team_season_features(prior_games, cur_season):
+    """prior_games: juegos de la ventana como dicts con "season" y "advanced".
+    Regresa season_games (cuantos son de esta temporada) y <metrica>_season
+    (promedio solo con esos; vacio si aun no hay). Misma funcion al entrenar
+    (nba_train_data) y al predecir (team_side_report)."""
+    cur = [g for g in prior_games if g.get("season") == cur_season and g.get("advanced")]
+    out = {"season_games": len(cur)}
+    for k in SEASON_KEYS:
+        out[f"{k}_season"] = _avg([g["advanced"].get(k) for g in cur]) if cur else None
+    return out
+
+
+def ml_extra_features(rep_home, rep_away):
+    """Variables del modelo de equipo que no salen de 'advanced': prioridad a
+    esta temporada. Se usan igual en nba_predict.py y streamlit_app.py."""
+    row = {}
+    for side, rep in (("home", rep_home), ("away", rep_away)):
+        for k, v in (rep.get("season_feats") or {}).items():
+            row[f"{side}_{k}"] = v
+    return row
 
 
 def matchup_margin(team_adv, opp_adv):

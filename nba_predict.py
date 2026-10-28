@@ -50,11 +50,12 @@ def build_matchup_row(team_home, team_away, season, last_n, as_of_date):
     row["away_b2b"] = int(bool(rep_away.get("is_b2b")))
     row["home_missing_regulars"] = rep_home.get("missing_regulars")
     row["away_missing_regulars"] = rep_away.get("missing_regulars")
+    row.update(r.ml_extra_features(rep_home, rep_away))
     return row, rep_home, rep_away
 
 
 def predict_with_bundle(bundle, row):
-    X = pd.DataFrame([row])[bundle["features"]]
+    X = pd.DataFrame([row]).reindex(columns=bundle["features"])
     model = bundle["model"]
     if hasattr(model, "predict_proba"):
         return model.predict_proba(X)[0, 1]

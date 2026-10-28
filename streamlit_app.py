@@ -237,6 +237,7 @@ def build_full_report_nba(equipo_a, equipo_b, season, last_n, lesionado_a, lesio
         ml_row["away_b2b"] = int(bool(rep_away.get("is_b2b")))
         ml_row["home_missing_regulars"] = rep_home.get("missing_regulars")
         ml_row["away_missing_regulars"] = rep_away.get("missing_regulars")
+        ml_row.update(r.ml_extra_features(rep_home, rep_away))
 
     return {
         "team_a": team_a, "team_b": team_b, "team_home": team_home, "team_away": team_away,
@@ -278,7 +279,7 @@ def render_nba_report(team_a, team_b, team_home, team_away, matchup, rep_a, rep_
         return
 
     def _predict(bundle, row):
-        X = pd.DataFrame([row])[bundle["features"]]
+        X = pd.DataFrame([row]).reindex(columns=bundle["features"])
         model = bundle["model"]
         return model.predict_proba(X)[0, 1] if hasattr(model, "predict_proba") else model.predict(X)[0]
 

@@ -258,6 +258,11 @@ def build_rows_for_team(team, season, all_series, window, min_prior):
             away_regulars = _regular_ids(opp_series, away_game_idx, window)
             away_missing_regulars = len(away_regulars & opp_series[away_game_idx]["dnp_ids"])
 
+        cur_season = g.get("season", season)
+        away_prior = [x for x in opp_series if x["date"] and x["date"] < g["date"]][-window:]
+        home_sf = r.team_season_features(home_prior, cur_season)
+        away_sf = r.team_season_features(away_prior, cur_season)
+
         baseline = _baseline_projection(home_feats, away_feats, home_b2b, away_b2b)
         if baseline is None:
             continue
@@ -275,6 +280,10 @@ def build_rows_for_team(team, season, all_series, window, min_prior):
         for k in ADV_KEYS:
             row[f"home_{k}"] = home_feats[k]
             row[f"away_{k}"] = away_feats[k]
+        for k, v in home_sf.items():
+            row[f"home_{k}"] = v
+        for k, v in away_sf.items():
+            row[f"away_{k}"] = v
 
         row["baseline_home_points"] = baseline_home_points
         row["baseline_away_points"] = baseline_away_points

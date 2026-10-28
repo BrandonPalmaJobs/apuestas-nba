@@ -37,6 +37,11 @@ FEATURES = [
     "away_tov_pct", "away_oreb_pct", "away_dreb_pct", "away_ast_pct", "away_fast_break_pts", "away_points_in_paint",
     "home_days_rest", "away_days_rest", "home_b2b", "away_b2b",
     "home_missing_regulars", "away_missing_regulars",
+    # Prioridad a esta temporada (ver nba_report.team_season_features): cuantos
+    # juegos de la ventana son de esta temporada y sus promedios solo con esos.
+    "home_season_games", "away_season_games",
+    "home_off_rtg_season", "home_def_rtg_season", "home_net_rtg_season", "home_pace_season",
+    "away_off_rtg_season", "away_def_rtg_season", "away_net_rtg_season", "away_pace_season",
 ]
 
 LABEL_TOTAL = "label_total_points"
