@@ -206,13 +206,36 @@ def espn_team_event_ids(espn_team_id, season=None):
     return ids
 
 
+def espn_completed_event_ids_current(espn_team_id):
+    """IDs de los juegos YA TERMINADOS de la temporada actual, en orden
+    cronologico, con UNA llamada al calendario del equipo (API 'site', la
+    misma de find_next_matchup). espn_team_event_ids trae el calendario
+    COMPLETO (82 juegos, incluidos los de abril que aun no se juegan) - al
+    tomar "los ultimos N" de esa lista salian juegos futuros: lento (una
+    llamada por cada uno) y ademas sin juegos de esta temporada."""
+    data = get_json(f"{ESPN_BASE}/teams/{espn_team_id}/schedule")
+    done = []
+    for e in data.get("events", []):
+        comp = (e.get("competitions") or [{}])[0]
+        if ((comp.get("status") or {}).get("type") or {}).get("completed"):
+            done.append((e.get("date") or "", str(e["id"])))
+    return [eid for _, eid in sorted(done)]
+
+
 def espn_played_games(espn_team_id, season=None, last_n=None, request_delay=0.6):
     """Lista de los ultimos N juegos YA jugados de un equipo (id, fecha,
     rival) - usa el API 'core' (ver espn_competition_detail), que no esta
     bloqueado a diferencia del 'site' (site.api.espn.com/summary, el que se
     usaba antes y empezo a dar 403 incluso desde una red residencial normal
     despues de varias pruebas seguidas)."""
-    ids = espn_team_event_ids(espn_team_id, season=season)
+    ids = None
+    if (season or current_nba_season()) == current_nba_season():
+        try:
+            ids = espn_completed_event_ids_current(espn_team_id)
+        except Exception as e:
+            print(f"  calendario del equipo fallo ({e}) - uso la lista completa", file=sys.stderr)
+    if ids is None:
+        ids = espn_team_event_ids(espn_team_id, season=season)
     ids_to_check = ids[-(last_n * 2):] if last_n else ids  # margen por si algun juego no cargo bien
     games = []
     fallos_403 = 0
