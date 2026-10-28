@@ -5,10 +5,12 @@ name: Reentrenar modelos NBA
 # una pestana se quede conectada horas, y tiene mucha mas RAM disponible.
 #
 # Se puede disparar de 3 formas:
-#   1. Solo, todos los dias (cron de abajo) - pero nba_retrain_pipeline.py
-#      se auto-frena y no hace nada si el ultimo reentrenamiento fue hace
-#      menos de 3 dias (--min-days-between, default 3), asi que en la
-#      practica reentrena cada ~3 dias como se quiere.
+#   1. Solo, TODOS LOS DIAS de madrugada (crons de abajo), para que el
+#      segundo juego de un back-to-back ya use un modelo que aprendio del
+#      primero. Hay dos disparos (3:13 y 4:43 am CDMX): GitHub suele
+#      retrasar o saltar corridas programadas, asi que el segundo es
+#      respaldo - si el primero ya entreno, el freno --min-days-between 0.5
+#      (12 horas) hace que el segundo termine en segundos sin hacer nada.
 #   2. A mano desde GitHub: pestana "Actions" -> "Reentrenar modelos NBA" ->
 #      "Run workflow".
 #   3. A mano desde la terminal: gh workflow run retrain.yml
@@ -32,7 +34,11 @@ name: Reentrenar modelos NBA
 # la ultima vez.
 on:
   schedule:
-    - cron: "0 9 * * *"  # 09:00 UTC (~03:00 hora de Mexico) todos los dias
+    # CDMX es UTC-6 todo el ano (sin horario de verano). Minutos "raros" a
+    # proposito: GitHub retrasa mas los crons en punto (:00), que es cuando
+    # todo el mundo programa los suyos.
+    - cron: "13 9 * * *"   # 03:13 am CDMX
+    - cron: "43 10 * * *"  # 04:43 am CDMX (respaldo)
   workflow_dispatch: {}
 
 permissions:
@@ -53,7 +59,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Reentrenar (recolecta equipo + props, entrena los 6 modelos)
-        run: python nba_retrain_pipeline.py
+        run: python nba_retrain_pipeline.py --min-days-between 0.5
 
       - name: Guardar modelos, datos y cache actualizados en el repo
         # always(): aunque el reentrenamiento falle (y la corrida quede en rojo),
