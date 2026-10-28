@@ -368,6 +368,12 @@ def render_props_tab():
                                   key="props_season")
         window = c4.number_input("Ventana movil (juegos)", value=pp.WINDOW, step=1, min_value=3,
                                   key="props_window")
+        st.caption("Opcional: la linea de tu casa para ver probabilidad de over/under (deja 0 si no la tienes)")
+        l1, l2, l3, l4 = st.columns(4)
+        linea_pts = l1.number_input("Linea puntos", value=0.0, step=0.5, min_value=0.0, key="props_l_pts")
+        linea_reb = l2.number_input("Linea rebotes", value=0.0, step=0.5, min_value=0.0, key="props_l_reb")
+        linea_ast = l3.number_input("Linea asist.", value=0.0, step=0.5, min_value=0.0, key="props_l_ast")
+        momio = l4.number_input("Momio (americano)", value=-110, step=5, key="props_momio")
         st.session_state["props_log_this"] = st.checkbox(
             "Guardar esta prediccion en el historial de seguimiento (solo si hay juego real)", value=True)
         submitted = st.form_submit_button("Predecir", type="primary", use_container_width=True)
@@ -411,15 +417,9 @@ def render_props_tab():
         st.warning("No hay suficientes datos de equipo recientes para calcular el contexto del rival.")
         return
 
-    row = {
-        "avg_points": r._avg([g["points"] for g in recent]),
-        "avg_rebounds": r._avg([g["rebounds"] for g in recent]),
-        "avg_assists": r._avg([g["assists"] for g in recent]),
-        "avg_minutes": r._avg([g["minutes"] for g in recent]),
-        "team_off_rtg": rep_team["advanced"]["off_rtg"], "team_pace": rep_team["advanced"]["pace"],
-        "opp_def_rtg": rep_opp["advanced"]["def_rtg"], "opp_pace": rep_opp["advanced"]["pace"],
-        "days_rest": rep_team.get("days_rest"), "b2b": int(bool(rep_team.get("is_b2b"))),
-    }
+    is_home = str(matchup.get("home_espn_id")) == str(team["espn_id"]) if matchup else None
+    row = pp.build_props_row(recent, rep_team, rep_opp, is_home=is_home)
+    lineas = {"points": linea_pts or None, "rebounds": linea_reb or None, "assists": linea_ast or None}
 
     st.subheader(f"{player_name} ({team['full_name']}) vs {opponent['full_name']}")
     game_summaries = [f"{g['points']:.0f}p/{g['rebounds']:.0f}r/{g['assists']:.0f}a" for g in recent]
@@ -443,6 +443,14 @@ def render_props_tab():
             st.metric(f"{label} ({bundle['model_name']})", num(predicho),
                       delta=f"{predicho - row[f'avg_{stat}']:+.1f} vs. promedio propio")
             st.caption(f"Mediana ultimos {len(recent)}: {mediana:.1f} → {over_under}")
+            ou = pp.over_under(bundle, predicho, lineas[stat], momio)
+            if ou:
+                icono = "✅" if ou["edge"] > 0 else "➖"
+                st.markdown(f"**Linea {ou['line']}**: over {ou['p_over']:.0%} · under {ou['p_under']:.0%}  \n"
+                            f"{icono} {ou['pick']} {ou['p_pick']:.0%} vs {ou['p_needed']:.0%} que pide el momio "
+                            f"({ou['edge']:+.1%})")
+            elif lineas[stat]:
+                st.caption("Reentrena los modelos para ver probabilidades.")
         preds[stat] = {"pred": predicho, "model_name": bundle["model_name"], "baseline": row[f"avg_{stat}"]}
 
     if matchup and st.session_state.get("props_log_this", True):

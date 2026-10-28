@@ -19,7 +19,9 @@ import os
 from datetime import datetime
 
 import joblib
+import numpy as np
 import pandas as pd
+from scipy.stats import norm
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.inspection import permutation_importance
@@ -29,8 +31,56 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 FEATURES = ["avg_points", "avg_rebounds", "avg_assists", "avg_minutes",
+            "avg_points_last3", "avg_rebounds_last3", "avg_assists_last3", "avg_minutes_last3",
             "team_off_rtg", "team_pace", "opp_def_rtg", "opp_pace",
-            "days_rest", "b2b"]
+            "days_rest", "b2b",
+            # Contexto de minutos/uso: local o visita, companeros habituales
+            # ausentes, y margen proyectado (las palizas recortan minutos).
+            "is_home", "teammates_out", "proj_margin", "proj_blowout"]
+
+
+def over_threshold(line):
+    """Las stats son enteras: una linea de 24.5 se pasa con 25+, una de 24
+    (push posible) tambien se cuenta desde 25 - el umbral siempre es N.5."""
+    return np.floor(line) + 0.5
+
+
+def fit_sigma_curve(preds, y, n_bins=5):
+    """Que tanto se equivoca el modelo SEGUN el tamano de la prediccion: un
+    jugador proyectado a 28 puntos varia mucho mas que uno proyectado a 6.
+    Se agrupan las predicciones del set de prueba en bins y se guarda la
+    desviacion estandar del error en cada uno - con eso se convierte la
+    prediccion en una probabilidad de over/under (distribucion normal)."""
+    df = pd.DataFrame({"pred": preds, "resid": np.asarray(y) - np.asarray(preds)})
+    df["bin"] = pd.qcut(df["pred"], q=min(n_bins, df["pred"].nunique()), duplicates="drop")
+    g = df.groupby("bin", observed=True).agg(center=("pred", "median"), sigma=("resid", "std")).dropna()
+    return {"centers": [float(x) for x in g["center"]],
+            "sigmas": [max(float(x), 0.5) for x in g["sigma"]]}
+
+
+def prob_over(pred, line, sigma_curve):
+    """P(stat > linea) segun la prediccion y la curva de error del modelo."""
+    sigma = float(np.interp(pred, sigma_curve["centers"], sigma_curve["sigmas"]))
+    return float(1 - norm.cdf((over_threshold(line) - pred) / sigma))
+
+
+def evaluate_over_under(pred_fit, y_fit, pred_eval, y_eval, line_eval):
+    """Prueba honesta de las probabilidades: la curva de error se ajusta con
+    la PRIMERA mitad del set de prueba y se evalua en la SEGUNDA. Como no hay
+    lineas reales de casas guardadas, la linea de referencia es el promedio
+    movil del jugador redondeado a .5 (parecido a como la ponen las casas)."""
+    curve = fit_sigma_curve(pred_fit, y_fit)
+    p = np.array([prob_over(pr, ln, curve) for pr, ln in zip(pred_eval, line_eval)])
+    actual = (np.asarray(y_eval) > over_threshold(np.asarray(line_eval))).astype(int)
+    confident = np.abs(p - 0.5) >= 0.1
+    return {
+        "brier": round(float(np.mean((p - actual) ** 2)), 4),
+        "brier_moneda": round(float(np.mean((0.5 - actual) ** 2)), 4),
+        "acierto_over_under": round(float(np.mean((p > 0.5) == actual)), 4),
+        "acierto_si_confianza_60": round(float(np.mean((p[confident] > 0.5) == actual[confident])), 4)
+            if confident.any() else None,
+        "pct_jugadas_confianza_60": round(float(confident.mean()), 4),
+    }
 
 STATS = [
     ("points", "label_points", "avg_points", "Puntos"),
@@ -81,9 +131,12 @@ def print_feature_importance(model, X_test, y_test, features, title, n_repeats=1
 
 
 def train_stat(df, test_frac, model_out, label, naive_col, title):
+    # Datasets viejos (antes de agregar las variables de contexto) siguen
+    # funcionando: se usan solo las columnas que existan.
+    features = [f for f in FEATURES if f in df.columns]
     train_df, test_df = time_split(df, test_frac)
-    X_train, y_train = train_df[FEATURES], train_df[label]
-    X_test, y_test = test_df[FEATURES], test_df[label]
+    X_train, y_train = train_df[features], train_df[label]
+    X_test, y_test = test_df[features], test_df[label]
 
     linreg = Pipeline([
         ("imputer", SimpleImputer(strategy="median")),
@@ -112,21 +165,35 @@ def train_stat(df, test_frac, model_out, label, naive_col, title):
     print(f"Mejor modelo ({title}) por MAE: {best_name}")
 
     if best_name == "Gradient Boosting":
-        model_to_save = hgb
+        model_to_save, best_pred = hgb, pred_hgb
     elif best_name.startswith("Baseline"):
-        model_to_save = NaiveBaselineRegressor(naive_col)
+        model_to_save, best_pred = NaiveBaselineRegressor(naive_col), pred_naive
     else:
-        model_to_save = linreg
-    joblib.dump({"model": model_to_save, "features": FEATURES, "model_name": best_name}, model_out)
+        model_to_save, best_pred = linreg, pred_linreg
+
+    # Probabilidades over/under: evaluacion honesta (mitad / mitad) y curva
+    # final ajustada con todo el set de prueba para usarla al predecir.
+    half = len(test_df) // 2
+    line_ref = np.floor(test_df[naive_col].values) + 0.5
+    ou = evaluate_over_under(best_pred[:half], y_test.values[:half],
+                             best_pred[half:], y_test.values[half:], line_ref[half:])
+    print(f"Over/under vs. linea de referencia (promedio movil a .5): acierto {ou['acierto_over_under']:.1%}, "
+          f"Brier {ou['brier']} (moneda al aire: {ou['brier_moneda']}); "
+          f"con confianza >=60%: {ou['acierto_si_confianza_60']} en {ou['pct_jugadas_confianza_60']:.0%} de los casos")
+    sigma_curve = fit_sigma_curve(best_pred, y_test.values)
+    results.append({"modelo": "over_under (" + best_name + ")", **ou})
+
+    joblib.dump({"model": model_to_save, "features": features, "model_name": best_name,
+                 "sigma_curve": sigma_curve}, model_out)
     print(f"Modelo guardado en {model_out}")
-    print_feature_importance(model_to_save, X_test, y_test, FEATURES, f"Importancia de variables ({title})")
+    print_feature_importance(model_to_save, X_test, y_test, features, f"Importancia de variables ({title})")
     return results
 
 
 def log_training_history(n_rows, n_players, results_by_stat, history_path="training_history_props.csv"):
     row = {"timestamp": datetime.now().isoformat(timespec="seconds"), "n_rows": n_rows, "n_players": n_players}
     for stat_key, results in results_by_stat.items():
-        rdf = pd.DataFrame(results)
+        rdf = pd.DataFrame([x for x in results if "mae" in x])
         best = rdf.sort_values("mae").iloc[0]
         naive = rdf[rdf["modelo"].str.startswith("Baseline")].iloc[0]
         row[f"modelo_{stat_key}"] = best["modelo"]

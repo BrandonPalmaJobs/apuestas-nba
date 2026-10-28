@@ -109,15 +109,31 @@ def build_player_rows(team, season, all_team_series, window, min_prior, max_game
                 continue
             b2b = int(days_rest <= 1)
 
+            g_team = team_series[i_team]
+            # Companeros de la rotacion habitual (sin contar al propio jugador)
+            # que NO jugaron este juego -> mas minutos/uso para el resto.
+            regulars = td._regular_ids(team_series, i_team, window) - {str(pid)}
+            teammates_out = len(regulars & g_team.get("dnp_ids", set()))
+            last3 = prior[-3:]
+            proj_margin = td.r.matchup_margin(team_feats, opp_feats)
+
             rows.append({
                 "event_id": pg["event_id"], "date": pg["date"],
-                "season": team_series[i_team].get("season", season),
+                "season": g_team.get("season", season),
                 "player_id": pid, "player_name": info["name"], "team": team["abbreviation"],
                 "avg_points": avg_points, "avg_rebounds": avg_rebounds,
                 "avg_assists": avg_assists, "avg_minutes": avg_minutes,
+                "avg_points_last3": td.r._avg([x["points"] for x in last3]),
+                "avg_rebounds_last3": td.r._avg([x["rebounds"] for x in last3]),
+                "avg_assists_last3": td.r._avg([x["assists"] for x in last3]),
+                "avg_minutes_last3": td.r._avg([x["minutes"] for x in last3]),
                 "team_off_rtg": team_feats["off_rtg"], "team_pace": team_feats["pace"],
                 "opp_def_rtg": opp_feats["def_rtg"], "opp_pace": opp_feats["pace"],
                 "days_rest": days_rest, "b2b": b2b,
+                "is_home": int(bool(g_team.get("is_home"))),
+                "teammates_out": teammates_out,
+                "proj_margin": proj_margin,
+                "proj_blowout": abs(proj_margin) if proj_margin is not None else None,
                 "n_prior": len(prior),
                 "label_points": pg["points"], "label_rebounds": pg["rebounds"],
                 "label_assists": pg["assists"], "label_minutes": pg["minutes"],

@@ -371,6 +371,22 @@ def team_side_report(team, opponent, season, last_n, lesionado_override=None, as
     }
 
 
+def matchup_margin(team_adv, opp_adv):
+    """Margen proyectado (puntos) desde la perspectiva de `team`, con la misma
+    formula transparente de project_points: rating ofensivo propio contra el
+    defensivo del rival (y viceversa), escalado por el ritmo promedio. Lo usan
+    los props de jugador para anticipar palizas (las estrellas juegan menos
+    minutos cuando el juego se decide temprano). Recibe los dicts de metricas
+    avanzadas (los de team_side_report()['advanced'] o los de la ventana movil
+    de entrenamiento - mismas llaves)."""
+    pace = _avg([team_adv.get("pace"), opp_adv.get("pace")]) or 99.0
+    team_rtg = _avg([team_adv.get("off_rtg"), opp_adv.get("def_rtg")])
+    opp_rtg = _avg([opp_adv.get("off_rtg"), team_adv.get("def_rtg")])
+    if team_rtg is None or opp_rtg is None:
+        return None
+    return (team_rtg - opp_rtg) * pace / 100
+
+
 def project_points(team_rep, opp_rep):
     adv, opp_adv = team_rep["advanced"], opp_rep["advanced"]
     if not adv or not opp_adv or adv.get("off_rtg") is None or opp_adv.get("def_rtg") is None:
