@@ -349,8 +349,27 @@ def team_game_boxscore(event_id, espn_team_id):
 def espn_game_roster(event_id, espn_team_id):
     """Roster de UN equipo en UN juego ya jugado: quien jugo, quien empezo
     (starter), y su playerId - la base para props de jugador (Fase 3).
-    NO se cachea en disco completo (solo los stats individuales, ver
-    espn_player_game_stats) porque es liviano y rapido de re-pedir."""
+
+    Se cachea en disco (igual que las stats de jugador) una vez que el juego
+    TERMINO: el roster de un juego terminado ya no cambia, y re-pedirlo era
+    lo que mas tardaba en cada reentrenamiento (miles de juegos x 2 pasos)."""
+    global _cache_dirty
+    cache = _load_summary_cache()
+    key = f"roster:{event_id}:{espn_team_id}"
+    if key in cache:
+        return cache[key]
+    out = _fetch_game_roster(event_id, espn_team_id)
+    try:
+        finished = bool(espn_competition_detail(event_id).get("completed"))
+    except Exception:
+        finished = False
+    if finished and out:
+        cache[key] = out
+        _cache_dirty = True
+    return out
+
+
+def _fetch_game_roster(event_id, espn_team_id):
     data = get_json(f"{ESPN_CORE_BASE}/events/{event_id}/competitions/{event_id}"
                      f"/competitors/{espn_team_id}/roster", params={"limit": 30})
     out = []
