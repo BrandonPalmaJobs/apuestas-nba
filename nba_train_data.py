@@ -104,10 +104,65 @@ def build_team_season_series(team, season, max_games=None):
             "event_id": e["id"], "date": game_date, "opponent_espn_id": opp_espn_id,
             "advanced": adv, "points": my_points, "opp_points": opp_points,
             "is_home": my_home, "days_rest": days_rest,
-            "started_ids": started_ids, "dnp_ids": dnp_ids,
+            "started_ids": started_ids, "dnp_ids": dnp_ids, "season": season,
         })
         prev_date = game_date
     return series
+
+
+# Tope de dias de descanso: entre temporadas (o tras el All-Star) el
+# "descanso" puede ser de meses, un valor que el modelo nunca ve al predecir
+# en plena temporada. Se recorta para que no distorsione el entrenamiento.
+MAX_REST_DAYS = 10
+
+
+def rest_days(prev_date, date):
+    if not prev_date or not date:
+        return None
+    d1 = datetime.fromisoformat(prev_date.replace("Z", "+00:00")).date()
+    d2 = datetime.fromisoformat(date.replace("Z", "+00:00")).date()
+    return min((d2 - d1).days, MAX_REST_DAYS)
+
+
+def parse_seasons(seasons_arg, season):
+    """'2026,2027' -> [2026, 2027]. Sin --seasons: solo `season`."""
+    if seasons_arg:
+        return sorted(int(x) for x in seasons_arg.split(",") if x.strip())
+    return [season]
+
+
+def collect_series_for_seasons(teams, seasons, max_games=None, verbose=True):
+    """Historial de cada equipo UNIENDO varias temporadas en orden de fecha
+    (ej. toda la 2025-26 + lo que va de la 2026-27). Asi los primeros juegos
+    de la temporada nueva usan como promedio movil los ultimos juegos de la
+    temporada anterior, y ningun juego se queda fuera por falta de historia.
+    Tambien recolecta a cualquier rival que aparezca aunque no se haya pedido
+    (ver comentario en collect_league_dataset)."""
+    import time
+    all_series = {}
+    to_process = list(teams)
+    seen_ids = {str(t["espn_id"]) for t in teams}
+    i = 0
+    t0 = time.time()
+    while i < len(to_process):
+        team = to_process[i]
+        i += 1
+        series = []
+        for season in seasons:
+            series.extend(build_team_season_series(team, season, max_games=max_games))
+        series.sort(key=lambda g: g["date"] or "")
+        all_series[str(team["espn_id"])] = series
+        if verbose:
+            print(f"  [{i}] {team['full_name']}: {len(series)} juegos recolectados "
+                  f"(temporadas {seasons}, {time.time() - t0:.0f}s acumulados)", file=sys.stderr)
+        for g in series:
+            opp_id = str(g["opponent_espn_id"])
+            if opp_id not in seen_ids:
+                seen_ids.add(opp_id)
+                opp_team = next((t for t in n.TEAMS if str(t["espn_id"]) == opp_id), None)
+                if opp_team:
+                    to_process.append(opp_team)
+    return all_series
 
 
 def _regular_ids(series, upto_idx, window, top_n=5):
@@ -190,16 +245,8 @@ def build_rows_for_team(team, season, all_series, window, min_prior):
 
         home_prior = series[max(0, i - window):i]
         home_last_date = home_prior[-1]["date"] if home_prior else None
-        home_days_rest = None
-        if home_last_date and g["date"]:
-            d1 = datetime.fromisoformat(home_last_date.replace("Z", "+00:00")).date()
-            d2 = datetime.fromisoformat(g["date"].replace("Z", "+00:00")).date()
-            home_days_rest = (d2 - d1).days
-        away_days_rest = None
-        if away_last_game and away_last_game["date"] and g["date"]:
-            d1 = datetime.fromisoformat(away_last_game["date"].replace("Z", "+00:00")).date()
-            d2 = datetime.fromisoformat(g["date"].replace("Z", "+00:00")).date()
-            away_days_rest = (d2 - d1).days
+        home_days_rest = rest_days(home_last_date, g["date"])
+        away_days_rest = rest_days(away_last_game["date"] if away_last_game else None, g["date"])
         home_b2b = home_days_rest is not None and home_days_rest <= 1
         away_b2b = away_days_rest is not None and away_days_rest <= 1
 
@@ -217,7 +264,7 @@ def build_rows_for_team(team, season, all_series, window, min_prior):
         baseline_home_points, baseline_away_points = baseline
 
         row = {
-            "event_id": g["event_id"], "date": g["date"], "season": season,
+            "event_id": g["event_id"], "date": g["date"], "season": g.get("season", season),
             "home_team": team["abbreviation"], "away_team_espn_id": opp_id,
             "home_n_prior": len(home_prior), "away_n_prior": len(
                 [x for x in opp_series if x["date"] and x["date"] < g["date"]]),
@@ -243,42 +290,18 @@ def build_rows_for_team(team, season, all_series, window, min_prior):
     return rows
 
 
-def collect_league_dataset(season, team_names=None, window=10, min_prior=5, verbose=True, max_games=None):
+def collect_league_dataset(season, team_names=None, window=10, min_prior=5, verbose=True, max_games=None,
+                           seasons=None):
+    """seasons: lista de temporadas a unir (ej. [2026, 2027]). Sin ella,
+    solo `season` (comportamiento anterior).
+
+    Nota historica: ESPN regresa los IDs de equipo como texto (ej. "13")
+    y TEAMS los guarda como entero - todo se normaliza a str() para que las
+    busquedas no fallen en silencio (antes daba 0 filas sin error)."""
     teams = n.TEAMS
     if team_names:
         teams = [n.resolve_team(name) for name in team_names]
-
-    # Para no perder filas cuando el rival de un equipo de la muestra no esta
-    # en la muestra (--teams de prueba), se recolecta la temporada completa
-    # de CUALQUIER rival que aparezca, aunque no se haya pedido explicitamente.
-    # Con --max-games (solo para pruebas rapidas) esto se limita a los
-    # rivales de esos mismos juegos recientes, no a toda la liga.
-    # ESPN regresa los IDs de equipo como texto (ej. "13"), mientras que
-    # TEAMS los guarda como entero - se normaliza todo a str() aqui para
-    # que las comparaciones/busquedas no fallen en silencio (paso esto por
-    # alto la primera vez: la coleccion corria sin error pero devolvia 0
-    # filas porque ningun opp_id encontraba su equipo).
-    needed_ids = {str(t["espn_id"]) for t in teams}
-    all_series = {}
-    t0 = __import__("time").time()
-    to_process = list(teams)
-    seen_ids = set(needed_ids)
-    i = 0
-    while i < len(to_process):
-        team = to_process[i]
-        i += 1
-        series = build_team_season_series(team, season, max_games=max_games)
-        all_series[str(team["espn_id"])] = series
-        if verbose:
-            print(f"  [{i}] {team['full_name']}: {len(series)} juegos recolectados "
-                  f"({__import__('time').time() - t0:.0f}s acumulados)", file=sys.stderr)
-        for g in series:
-            opp_id = str(g["opponent_espn_id"])
-            if opp_id not in seen_ids:
-                seen_ids.add(opp_id)
-                opp_team = next((t for t in n.TEAMS if str(t["espn_id"]) == opp_id), None)
-                if opp_team:
-                    to_process.append(opp_team)
+    all_series = collect_series_for_seasons(teams, seasons or [season], max_games=max_games, verbose=verbose)
 
     all_rows = []
     for team in teams:
@@ -298,6 +321,9 @@ def main():
     parser.add_argument("--window", type=int, default=10, help="Ventana movil de juegos previos (default 10)")
     parser.add_argument("--min-prior", type=int, default=5,
                          help="Minimo de juegos previos para confiar en el promedio movil (default 5)")
+    parser.add_argument("--seasons", default=None,
+                         help="Varias temporadas separadas por coma, ej. '2026,2027' (temporada pasada + actual). "
+                              "Tiene prioridad sobre --season")
     parser.add_argument("--out", default="training_data_nba.csv")
     parser.add_argument("--max-games", type=int, default=None,
                          help="Solo para pruebas rapidas: limita a los ultimos N juegos por equipo "
@@ -308,7 +334,7 @@ def main():
     team_names = [t.strip() for t in args.teams.split(",")] if args.teams else None
     try:
         df = collect_league_dataset(season, team_names=team_names, window=args.window, min_prior=args.min_prior,
-                                     max_games=args.max_games)
+                                     max_games=args.max_games, seasons=parse_seasons(args.seasons, season))
     finally:
         n.flush_cache()
 
@@ -316,6 +342,10 @@ def main():
     print(f"\nGuardado {len(df)} filas en {args.out}")
     if len(df):
         print(f"Tasa de victoria local (dataset): {df['label_home_win'].mean():.1%}")
+        print(f"Filas por temporada: {df['season'].value_counts().sort_index().to_dict()}")
+    else:
+        print("ERROR: el dataset salio VACIO - no hay juegos suficientes para entrenar.", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

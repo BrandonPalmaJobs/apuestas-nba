@@ -56,6 +56,10 @@ jobs:
         run: python nba_retrain_pipeline.py
 
       - name: Guardar modelos, datos y cache actualizados en el repo
+        # always(): aunque el reentrenamiento falle (y la corrida quede en rojo),
+        # se guarda lo que si se avanzo - sobre todo el cache, para no volver a
+        # descargar todo la proxima vez.
+        if: always()
         run: |
           git config user.name "NBA Apuestas Bot"
           git config user.email "nba-apuestas-bot@users.noreply.github.com"

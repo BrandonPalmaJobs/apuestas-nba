@@ -104,17 +104,14 @@ def build_player_rows(team, season, all_team_series, window, min_prior, max_game
             # Point-in-time (solo mira el juego previo, nunca el actual).
             days_rest = None
             if i_team > 0:
-                prev_date = team_series[i_team - 1]["date"]
-                if prev_date and pg["date"]:
-                    d1 = dt.fromisoformat(prev_date.replace("Z", "+00:00")).date()
-                    d2 = dt.fromisoformat(pg["date"].replace("Z", "+00:00")).date()
-                    days_rest = (d2 - d1).days
+                days_rest = td.rest_days(team_series[i_team - 1]["date"], pg["date"])
             if days_rest is None:
                 continue
             b2b = int(days_rest <= 1)
 
             rows.append({
-                "event_id": pg["event_id"], "date": pg["date"], "season": season,
+                "event_id": pg["event_id"], "date": pg["date"],
+                "season": team_series[i_team].get("season", season),
                 "player_id": pid, "player_name": info["name"], "team": team["abbreviation"],
                 "avg_points": avg_points, "avg_rebounds": avg_rebounds,
                 "avg_assists": avg_assists, "avg_minutes": avg_minutes,
@@ -131,36 +128,15 @@ def build_player_rows(team, season, all_team_series, window, min_prior, max_game
     return rows
 
 
-def collect_props_dataset(season, team_names=None, window=10, min_prior=5, max_games=None, verbose=True):
+def collect_props_dataset(season, team_names=None, window=10, min_prior=5, max_games=None, verbose=True,
+                          seasons=None):
+    """seasons: lista de temporadas a unir (ej. [2026, 2027]) - ver
+    nba_train_data.collect_series_for_seasons."""
     teams = n.TEAMS
     if team_names:
         teams = [n.resolve_team(name) for name in team_names]
-
-    # Reusa el mismo motor de nba_train_data.py para el contexto de equipo -
-    # si ya corriste reentrenar_modelos.bat para esta temporada, la mayoria
-    # de estas llamadas de equipo ya estan en cache y esto es casi
-    # instantaneo; lo nuevo y lento aqui es roster+stats por JUGADOR.
-    all_team_series = {}
-    needed_ids = {str(t["espn_id"]) for t in teams}
-    to_process = list(teams)
-    seen_ids = set(needed_ids)
-    i = 0
-    t0 = time.time()
-    while i < len(to_process):
-        team = to_process[i]
-        i += 1
-        series = td.build_team_season_series(team, season, max_games=max_games)
-        all_team_series[str(team["espn_id"])] = series
-        if verbose:
-            print(f"  [equipo {i}] {team['full_name']}: {len(series)} juegos de contexto "
-                  f"({time.time()-t0:.0f}s)", file=sys.stderr)
-        for g in series:
-            opp_id = str(g["opponent_espn_id"])
-            if opp_id not in seen_ids:
-                seen_ids.add(opp_id)
-                opp_team = next((t for t in n.TEAMS if str(t["espn_id"]) == opp_id), None)
-                if opp_team:
-                    to_process.append(opp_team)
+    all_team_series = td.collect_series_for_seasons(teams, seasons or [season], max_games=max_games,
+                                                    verbose=verbose)
 
     all_rows = []
     for team in teams:
@@ -178,6 +154,8 @@ def main():
     parser.add_argument("--window", type=int, default=10, help="Ventana movil de juegos previos (default 10)")
     parser.add_argument("--min-prior", type=int, default=5,
                          help="Minimo de juegos previos para confiar en el promedio movil (default 5)")
+    parser.add_argument("--seasons", default=None,
+                         help="Varias temporadas separadas por coma, ej. '2026,2027'. Tiene prioridad sobre --season")
     parser.add_argument("--out", default="training_data_props.csv")
     parser.add_argument("--max-games", type=int, default=None,
                          help="Solo para pruebas rapidas: limita a los ultimos N juegos por equipo")
@@ -187,7 +165,7 @@ def main():
     team_names = [t.strip() for t in args.teams.split(",")] if args.teams else None
     try:
         df = collect_props_dataset(season, team_names=team_names, window=args.window, min_prior=args.min_prior,
-                                    max_games=args.max_games)
+                                    max_games=args.max_games, seasons=td.parse_seasons(args.seasons, season))
     finally:
         n.flush_cache()
 
@@ -195,6 +173,10 @@ def main():
     print(f"\nGuardado {len(df)} filas en {args.out}")
     if len(df):
         print(f"Jugadores unicos: {df['player_id'].nunique()}")
+        print(f"Filas por temporada: {df['season'].value_counts().sort_index().to_dict()}")
+    else:
+        print("ERROR: el dataset de props salio VACIO - no hay juegos suficientes para entrenar.", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

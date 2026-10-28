@@ -59,6 +59,10 @@ def main():
     parser = argparse.ArgumentParser(description="Reentrena los modelos de NBA con los datos mas recientes")
     parser.add_argument("--season", type=int, default=None,
                          help="Anio en que TERMINA la temporada. Default: temporada actual")
+    parser.add_argument("--prev-seasons", type=int, default=1,
+                         help="Cuantas temporadas ANTERIORES se suman a la actual (default 1). Asi el modelo "
+                              "entrena desde el dia 1 de la temporada nueva: los primeros juegos usan como "
+                              "promedio movil el final de la temporada pasada, en vez de quedar fuera.")
     parser.add_argument("--window", type=int, default=10)
     parser.add_argument("--min-prior", type=int, default=5)
     parser.add_argument("--skip-props", action="store_true",
@@ -84,16 +88,21 @@ def main():
 
     import nba_data as n
     season = args.season or n.current_nba_season()
-    season_args = ["--season", str(season), "--window", str(args.window), "--min-prior", str(args.min_prior)]
+    seasons = list(range(season - args.prev_seasons, season + 1))
+    print(f"Temporadas a usar: {seasons}")
+    season_args = ["--season", str(season), "--seasons", ",".join(map(str, seasons)),
+                   "--window", str(args.window), "--min-prior", str(args.min_prior)]
+    failed = []
 
     ok = run(["nba_train_data.py", *season_args, "--out", "training_data_nba.csv"],
              "PASO 1/4: Recolectando dataset historico de equipos (liga completa)")
     if not ok:
         print("\nSe detiene el reentrenamiento: la recoleccion de equipos fallo.")
-        return
+        sys.exit(1)
 
-    run(["nba_train.py", "--data", "training_data_nba.csv"],
-        "PASO 2/4: Reentrenando los modelos de equipo (total/margen/money line)")
+    if not run(["nba_train.py", "--data", "training_data_nba.csv"],
+        "PASO 2/4: Reentrenando los modelos de equipo (total/margen/money line)"):
+        failed.append("entrenamiento de equipo")
 
     if args.skip_props:
         print("\nPASO 3-4/4: omitidos (--skip-props)")
@@ -101,15 +110,23 @@ def main():
         ok = run(["nba_props_data.py", *season_args, "--out", "training_data_props.csv"],
                  "PASO 3/4: Recolectando dataset historico de props de jugador (liga completa)")
         if ok:
-            run(["nba_props_train.py", "--data", "training_data_props.csv"],
-                "PASO 4/4: Reentrenando los modelos de props (puntos/rebotes/asistencias)")
+            if not run(["nba_props_train.py", "--data", "training_data_props.csv"],
+                       "PASO 4/4: Reentrenando los modelos de props (puntos/rebotes/asistencias)"):
+                failed.append("entrenamiento de props")
         else:
             print("\nSe omite PASO 4/4: la recoleccion de props fallo.")
+            failed.append("recoleccion de props")
 
     print("\n" + "=" * 72)
     print("Listo. Revisa training_history_nba.csv / training_history_props.csv para ver "
           "como va cambiando el desempeno de los modelos cada vez que reentrenas.")
     print("=" * 72)
+    if failed:
+        # Codigo de salida distinto de 0 -> GitHub Actions marca la corrida en ROJO y
+        # te avisa, en vez de reportar "exito" sin haber entrenado nada (lo que paso
+        # todo octubre 2026). Los pasos que si funcionaron igual se guardan.
+        print(f"FALLARON: {', '.join(failed)}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
