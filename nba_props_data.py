@@ -129,6 +129,46 @@ def season_features(prior, cur_season):
     return out
 
 
+# Un companero "deja hueco" solo si de verdad estaba en la rotacion
+# reciente: jugo al menos MIN_GAMES de los ultimos `window` juegos del
+# equipo con MIN_MINUTES+ de promedio. Si lleva semanas fuera, sus
+# companeros YA absorbieron su produccion en sus propios promedios - contarlo
+# otra vez seria doble conteo.
+VACATED_MIN_GAMES = 2
+VACATED_MIN_MINUTES = 15
+VACATED_STATS = ["points", "rebounds", "assists", "threes", "minutes"]
+
+
+def absent_info(recent_games):
+    """Resumen de un companero ausente a partir de sus juegos recientes
+    (los de la ventana del equipo): None si no estaba en la rotacion."""
+    if len(recent_games) < VACATED_MIN_GAMES:
+        return None
+    mins = sum(g["minutes"] or 0 for g in recent_games) / len(recent_games)
+    if mins < VACATED_MIN_MINUTES:
+        return None
+    info = {"group": main_group(recent_games)}
+    for k in VACATED_STATS:
+        vals = [g.get(k) or 0 for g in recent_games]
+        info[k] = sum(vals) / len(vals)
+    return info
+
+
+def vacated_features(absent, player_group):
+    """Produccion que dejan libre los companeros de rotacion que NO juegan:
+      - vacated_<stat>: total (puntos, rebotes, asistencias, triples, minutos)
+      - vacated_<stat>_same_pos: solo la de companeros de SU misma posicion
+        (lo que deja un base le cae sobre todo a otros guardias, lo de un
+        pivot a otros grandes)
+      - teammates_out: cuantos son."""
+    absent = [a for a in absent if a]
+    out = {"teammates_out": len(absent)}
+    for k in VACATED_STATS:
+        out[f"vacated_{k}"] = sum(a[k] for a in absent)
+        out[f"vacated_{k}_same_pos"] = sum(a[k] for a in absent if player_group and a["group"] == player_group)
+    return out
+
+
 def main_group(pgames):
     """Grupo de posicion mas frecuente del jugador (None si ESPN nunca lo trajo)."""
     groups = [x["group"] for x in pgames if x.get("group")]
@@ -201,10 +241,16 @@ def build_player_rows(team, season, all_team_series, player_games, starters_inde
             b2b = int(days_rest <= 1)
 
             g_team = team_series[i_team]
-            # Companeros de la rotacion habitual (sin contar al propio jugador)
-            # que NO jugaron este juego -> mas minutos/uso para el resto.
-            regulars = td._regular_ids(team_series, i_team, window) - {str(pid)}
-            teammates_out = len(regulars & g_team.get("dnp_ids", set()))
+            # Companeros de la rotacion que NO jugaron este juego y cuanta
+            # produccion dejan libre (ver vacated_features).
+            window_start = team_series[max(0, i_team - window)]["date"]
+            absent = []
+            for tid, tinfo in player_games.items():
+                if str(tid) == str(pid) or str(tid) not in g_team.get("dnp_ids", set()):
+                    continue
+                tg = [x for x in tinfo["games"] if window_start <= x["date"] < pg["date"]]
+                absent.append(absent_info(tg))
+            vacated = vacated_features(absent, group)
             last3 = prior[-3:]
             proj_margin = td.r.matchup_margin(team_feats, opp_feats)
             allowed = opp_allowed_asof(opp_id, opp_series, pg["date"], window, starters_index, group) or {}
@@ -219,7 +265,6 @@ def build_player_rows(team, season, all_team_series, player_games, starters_inde
                 "opp_def_rtg": opp_feats["def_rtg"], "opp_pace": opp_feats["pace"],
                 "days_rest": days_rest, "b2b": b2b,
                 "is_home": int(bool(g_team.get("is_home"))),
-                "teammates_out": teammates_out,
                 "proj_margin": proj_margin,
                 "proj_blowout": abs(proj_margin) if proj_margin is not None else None,
                 "n_prior": len(prior),
@@ -228,6 +273,7 @@ def build_player_rows(team, season, all_team_series, player_games, starters_inde
                 row[pc.avg_feature(k)] = v
                 row[f"{pc.avg_feature(k)}_last3"] = td.r._avg([pc.stat_value(x, k) for x in last3])
             row.update(season_features(prior, g_team.get("season", season)))
+            row.update(vacated)
             for k in pc.ALLOWED_STATS:
                 row[pc.allow_feature(k)] = allowed.get(k)
             for k in pc.TARGETS + ["minutes"]:

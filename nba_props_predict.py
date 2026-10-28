@@ -132,11 +132,54 @@ def opp_allowed_by_position(opponent, season, group, window=WINDOW, _cache=None)
     return pdata.allowed_per36(entries, group)
 
 
+# Estados de ESPN que cuentan como "no juega" para repartir su produccion.
+# Questionable / Day-To-Day NO cuentan (la mayoria termina jugando) - se
+# muestran aparte como aviso.
+OUT_STATUSES = ("out", "doubtful", "suspension", "suspended")
+
+
+def parse_injuries(rep_team):
+    """[(nombre_minusculas, estado_minusculas)] del reporte de lesionados."""
+    out = []
+    for item in rep_team.get("injuries_auto") or []:
+        name, _, status = item.partition(" (")
+        out.append((name.strip().lower(), status.rstrip(")").strip().lower()))
+    return out
+
+
+def _name_match(a, b):
+    return a == b or (len(a) > 4 and (a in b or b in a))
+
+
+def absent_teammates(rep_team, team_players, player_id=None):
+    """Version en vivo de la deteccion de ausentes del entrenamiento:
+    companeros reportados Out/Doubtful HOY que estaban en la rotacion
+    reciente. Regresa (lista para vacated_features, nombres fuera, nombres
+    en duda)."""
+    injuries = parse_injuries(rep_team)
+    absent, out_names, doubtful_names = [], [], []
+    for pid, info in (team_players or {}).items():
+        if player_id is not None and str(pid) == str(player_id):
+            continue
+        name = (info.get("name") or "").lower()
+        status = next((st for nm, st in injuries if _name_match(nm, name)), None)
+        if status is None:
+            continue
+        if any(s in status for s in OUT_STATUSES):
+            a = pdata.absent_info(info["games"])
+            if a:
+                absent.append(a)
+                out_names.append(info["name"])
+        else:
+            doubtful_names.append(f"{info['name']} ({status})")
+    return absent, out_names, doubtful_names
+
+
 # ---------------------------------------------------------------------------
 # Features y prediccion
 # ---------------------------------------------------------------------------
 
-def build_props_row(recent, rep_team, rep_opp, is_home=None, opp_allowed=None, season=None):
+def build_props_row(recent, rep_team, rep_opp, is_home=None, opp_allowed=None, season=None, absent=None):
     """Fila de features para los modelos de props - la MISMA para el CLI, la
     app y la tanda del dia, con las mismas columnas que arma
     nba_props_data.py al entrenar (las que un modelo viejo no use se ignoran)."""
@@ -148,8 +191,6 @@ def build_props_row(recent, rep_team, rep_opp, is_home=None, opp_allowed=None, s
         "opp_def_rtg": opp_adv["def_rtg"], "opp_pace": opp_adv["pace"],
         "days_rest": rep_team.get("days_rest"), "b2b": int(bool(rep_team.get("is_b2b"))),
         "is_home": None if is_home is None else int(bool(is_home)),
-        # Version en vivo: titulares habituales reportados lesionados hoy.
-        "teammates_out": rep_team.get("missing_regulars"),
         "proj_margin": proj_margin,
         "proj_blowout": abs(proj_margin) if proj_margin is not None else None,
         "start_rate": r._avg([1.0 if g.get("starter") else 0.0 for g in recent]),
@@ -158,6 +199,8 @@ def build_props_row(recent, rep_team, rep_opp, is_home=None, opp_allowed=None, s
         row[pc.avg_feature(k)] = r._avg([pc.stat_value(g, k) for g in recent])
         row[f"{pc.avg_feature(k)}_last3"] = r._avg([pc.stat_value(g, k) for g in last3])
     row.update(pdata.season_features(recent, season or n.current_nba_season()))
+    # Companeros fuera hoy y la produccion que dejan libre (ver absent_teammates).
+    row.update(pdata.vacated_features(absent or [], pdata.main_group(recent)))
     for k in pc.ALLOWED_STATS:
         row[pc.allow_feature(k)] = (opp_allowed or {}).get(k)
     return row
@@ -255,12 +298,13 @@ def predict_slate(bundles, season=None, game_date=None, window=WINDOW, min_minut
                 done += 1
                 n.flush_cache()
 
-            out_names = {name.split(" (")[0].lower() for name in rep_team.get("injuries_auto", [])
-                         if "(out)" in name.lower()}
+            _, team_out, _ = absent_teammates(rep_team, players)
+            team_out = {x.lower() for x in team_out}
             for pid, info in players.items():
                 recent = info["games"]
-                if len(recent) < 3 or info["name"].lower() in out_names:
+                if len(recent) < 3 or info["name"].lower() in team_out:
                     continue
+                absent, out_names, doubt_names = absent_teammates(rep_team, players, player_id=pid)
                 avg_min = r._avg([g["minutes"] for g in recent])
                 if avg_min is None or avg_min < min_minutes:
                     continue
@@ -270,7 +314,7 @@ def predict_slate(bundles, season=None, game_date=None, window=WINDOW, min_minut
                 except Exception:
                     allowed = None
                 row = build_props_row(recent, rep_team, rep_opp, is_home=is_home, opp_allowed=allowed,
-                                      season=season)
+                                      season=season, absent=absent)
                 preds = predict_row(bundles, row)
                 rows.append({
                     "player_id": pid, "player": info["name"], "team": team["full_name"],
@@ -278,6 +322,8 @@ def predict_slate(bundles, season=None, game_date=None, window=WINDOW, min_minut
                     "opponent": opponent["full_name"], "opp_abbr": opponent["abbreviation"],
                     "event_id": game["event_id"], "game_date": game["date"],
                     "min": round(avg_min, 1), "starter_rate": row["start_rate"],
+                    "companeros_fuera": ", ".join(out_names), "en_duda": ", ".join(doubt_names),
+                    "pts_libres_misma_pos": round(row["vacated_points_same_pos"], 1),
                     **{f"pred_{k}": v for k, v in preds.items()},
                     **{f"avg_{k}": row.get(pc.avg_feature(k)) for k in preds},
                 })
@@ -356,6 +402,7 @@ def main():
         rep_opp = r.team_side_report(opponent, team, season, args.window, as_of_date=as_of_date)
         opp_allowed = opp_allowed_by_position(opponent, season, pdata.main_group(recent), window=args.window) \
             if len(recent) >= 3 else None
+        team_players = team_players_recent_games(team["espn_id"], season, window=args.window)
     finally:
         n.flush_cache()
 
@@ -367,7 +414,15 @@ def main():
         return
 
     is_home = str(matchup.get("home_espn_id")) == str(team["espn_id"]) if matchup else None
-    row = build_props_row(recent, rep_team, rep_opp, is_home=is_home, opp_allowed=opp_allowed, season=season)
+    absent, out_names, doubt_names = absent_teammates(rep_team, team_players, player_id=player_id)
+    row = build_props_row(recent, rep_team, rep_opp, is_home=is_home, opp_allowed=opp_allowed, season=season,
+                          absent=absent)
+    if out_names:
+        print(f"Companeros FUERA hoy: {', '.join(out_names)} -> dejan {row['vacated_points']:.1f} pts, "
+              f"{row['vacated_assists']:.1f} ast, {row['vacated_minutes']:.0f} min libres "
+              f"({row['vacated_points_same_pos']:.1f} pts de su misma posicion)")
+    if doubt_names:
+        print(f"En duda (no se cuentan como fuera): {', '.join(doubt_names)}")
     preds = predict_row(bundles, row)
     lines = _parse_lines(args.linea)
 

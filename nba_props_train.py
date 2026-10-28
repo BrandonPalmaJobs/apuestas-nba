@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 
+import nba_props_data as pdata
 import props_config as pc
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.impute import SimpleImputer
@@ -44,6 +45,9 @@ FEATURES = (
     + [f"{pc.avg_feature(k)}_w" for k in list(pc.BASE_STATS) + list(pc.COMBOS)]
     + ["season_games", "start_rate", "team_off_rtg", "team_pace", "opp_def_rtg", "opp_pace",
        "days_rest", "b2b", "is_home", "teammates_out", "proj_margin", "proj_blowout"]
+    # Produccion que dejan libre los companeros ausentes (total y de su posicion)
+    + [f"vacated_{k}" for k in pdata.VACATED_STATS]
+    + [f"vacated_{k}_same_pos" for k in pdata.VACATED_STATS]
     + [pc.allow_feature(k) for k in pc.ALLOWED_STATS]
 )
 

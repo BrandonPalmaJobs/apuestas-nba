@@ -432,7 +432,16 @@ def _compute_props(jugador, equipo_jugador, equipo_rival, season, window, log_th
             opp_allowed = None
         finally:
             n.flush_cache()
-    row = pp.build_props_row(recent, rep_team, rep_opp, is_home=is_home, opp_allowed=opp_allowed, season=season)
+    with st.spinner("Revisando companeros lesionados..."):
+        try:
+            team_players = pp.team_players_recent_games(team["espn_id"], season, window=window)
+        except Exception:
+            team_players = {}
+        finally:
+            n.flush_cache()
+    absent, out_names, doubt_names = pp.absent_teammates(rep_team, team_players, player_id=player_id)
+    row = pp.build_props_row(recent, rep_team, rep_opp, is_home=is_home, opp_allowed=opp_allowed, season=season,
+                             absent=absent)
 
     raw = pp.predict_row(bundles, row)
     preds = {k: {"pred": v, "model_name": bundles[k]["model_name"], "baseline": row[pc.avg_feature(k)],
@@ -459,6 +468,8 @@ def _compute_props(jugador, equipo_jugador, equipo_rival, season, window, log_th
         "recent": [{k: g[k] for k in ("points", "rebounds", "assists")} for g in recent],
         "days_rest": rep_team.get("days_rest"), "is_b2b": rep_team.get("is_b2b"),
         "preds": preds,
+        "out_names": out_names, "doubt_names": doubt_names,
+        "vacated": {k: row[k] for k in row if k.startswith("vacated_")},
         # Datos del juego real (para registrar apuestas); None si no hay
         # partido programado entre estos dos equipos.
         "game": {"event_id": matchup["event_id"], "game_date": matchup["date"], "player_id": player_id,
@@ -490,6 +501,13 @@ def _render_props_result(res, run_id):
     if res.get("days_rest") is not None:
         alerta = " ⚠️ BACK-TO-BACK" if res.get("is_b2b") else ""
         st.caption(f"Descanso del equipo: {res['days_rest']} dia(s){alerta}")
+    if res.get("out_names"):
+        v = res["vacated"]
+        st.info(f"🚑 Fuera hoy: {', '.join(res['out_names'])}. Dejan libres ~{v['vacated_points']:.0f} pts, "
+                f"{v['vacated_rebounds']:.0f} reb, {v['vacated_assists']:.0f} ast y {v['vacated_minutes']:.0f} min "
+                f"(de su misma posicion: {v['vacated_points_same_pos']:.0f} pts). Ya esta en la prediccion.")
+    if res.get("doubt_names"):
+        st.caption("⚠️ En duda (no se cuentan como fuera; revisa antes del juego): " + ", ".join(res["doubt_names"]))
 
     momio = st.number_input("Momio over/under (americano)", value=-110, step=5,
                              key=f"props_momio_{run_id}",
@@ -599,6 +617,7 @@ def render_slate_tab():
             "Partido": f"{row['team_abbr']} vs {row['opp_abbr']}", "Min": row["min"],
             "Prediccion": round(pred, 1), "Promedio": round(row[f"avg_{stat}"], 1)
             if pd.notna(row.get(f"avg_{stat}")) else None,
+            "Fuera en su equipo": row.get("companeros_fuera") or "",
             "Linea": float(line),
             "Over %": round(ou["p_over"] * 100) if ou else None,
             "Under %": round(ou["p_under"] * 100) if ou else None,
@@ -617,9 +636,9 @@ def render_slate_tab():
 
     edited = st.data_editor(
         tdf, key=f"slate_editor_{stat}_{run}_{len(lines)}", hide_index=True, use_container_width=True,
-        column_order=["Jugador", "Partido", "Min", "Prediccion", "Promedio", "Linea", "Over %", "Under %",
+        column_order=["Jugador", "Partido", "Min", "Prediccion", "Promedio", "Fuera en su equipo", "Linea", "Over %", "Under %",
                       "Mejor", "Ventaja %", "Aposte"],
-        disabled=["Jugador", "Partido", "Min", "Prediccion", "Promedio", "Over %", "Under %", "Mejor",
+        disabled=["Jugador", "Partido", "Min", "Prediccion", "Promedio", "Fuera en su equipo", "Over %", "Under %", "Mejor",
                   "Ventaja %"],
         column_config={
             "Linea": st.column_config.NumberColumn(step=0.5, format="%.1f", min_value=0.5),
