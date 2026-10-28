@@ -279,7 +279,7 @@ def render_nba_report(team_a, team_b, team_home, team_away, matchup, rep_a, rep_
         return
 
     def _predict(bundle, row):
-        X = pd.DataFrame([row]).reindex(columns=bundle["features"])
+        X = r.model_input(bundle, row)
         model = bundle["model"]
         return model.predict_proba(X)[0, 1] if hasattr(model, "predict_proba") else model.predict(X)[0]
 

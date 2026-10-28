@@ -221,7 +221,7 @@ def predict_row(bundles, row):
     """{llave: prediccion} para todos los modelos cargados."""
     preds = {}
     for k, bundle in bundles.items():
-        X = pd.DataFrame([row]).reindex(columns=bundle["features"])
+        X = r.model_input(bundle, row)
         preds[k] = float(bundle["model"].predict(X)[0])
     return preds
 

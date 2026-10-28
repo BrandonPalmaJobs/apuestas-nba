@@ -55,7 +55,7 @@ def build_matchup_row(team_home, team_away, season, last_n, as_of_date):
 
 
 def predict_with_bundle(bundle, row):
-    X = pd.DataFrame([row]).reindex(columns=bundle["features"])
+    X = r.model_input(bundle, row)
     model = bundle["model"]
     if hasattr(model, "predict_proba"):
         return model.predict_proba(X)[0, 1]

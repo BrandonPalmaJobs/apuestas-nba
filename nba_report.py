@@ -406,7 +406,30 @@ def ml_extra_features(rep_home, rep_away):
     for side, rep in (("home", rep_home), ("away", rep_away)):
         for k, v in (rep.get("season_feats") or {}).items():
             row[f"{side}_{k}"] = v
+    # Proyeccion de la formula simple - la misma de
+    # nba_train_data._baseline_projection. Cuando la formula le gana al modelo
+    # entrenado, el "modelo" guardado es la formula y lee estas columnas.
+    h, a = rep_home.get("advanced") or {}, rep_away.get("advanced") or {}
+    pace = _avg([h.get("pace"), a.get("pace")]) or 99.0
+    home_rtg = _avg([h.get("off_rtg"), a.get("def_rtg")])
+    away_rtg = _avg([a.get("off_rtg"), h.get("def_rtg")])
+    if home_rtg is not None and away_rtg is not None:
+        home_pts = home_rtg * pace / 100 * (0.97 if rep_home.get("is_b2b") else 1)
+        away_pts = away_rtg * pace / 100 * (0.97 if rep_away.get("is_b2b") else 1)
+        row.update({"baseline_home_points": home_pts, "baseline_away_points": away_pts,
+                    "baseline_total_points": home_pts + away_pts, "baseline_home_margin": home_pts - away_pts})
     return row
+
+
+def model_input(bundle, row):
+    """DataFrame de una fila con las columnas que el modelo necesita (las de
+    entrenamiento, mas la columna de la formula si el modelo es la formula)."""
+    import pandas as pd
+    cols = list(bundle["features"])
+    col = getattr(bundle["model"], "col", None)
+    if col and col not in cols:
+        cols.append(col)
+    return pd.DataFrame([row]).reindex(columns=cols)
 
 
 def matchup_margin(team_adv, opp_adv):
