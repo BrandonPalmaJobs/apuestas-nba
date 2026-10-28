@@ -353,9 +353,8 @@ def render_reporte_tab():
 
 def render_props_tab():
     st.header("🏀 Props de jugador")
-    st.caption("Puntos, rebotes y asistencias de un jugador especifico en su proximo juego real, "
-               "comparado contra su propio promedio y contra la mediana de sus ultimos juegos "
-               "(no se usa una linea real de casa de apuestas - ninguna fuente publica la tiene).")
+    st.caption("Puntos, rebotes y asistencias de un jugador en su proximo juego real. Despues de predecir, "
+               "mueve la linea para ver como cambian las probabilidades de over/under.")
 
     team_names = sorted(t["full_name"] for t in n.TEAMS)
     with st.form("form_props"):
@@ -368,33 +367,40 @@ def render_props_tab():
                                   key="props_season")
         window = c4.number_input("Ventana movil (juegos)", value=pp.WINDOW, step=1, min_value=3,
                                   key="props_window")
-        st.caption("Opcional: la linea de tu casa para ver probabilidad de over/under (deja 0 si no la tienes)")
-        l1, l2, l3, l4 = st.columns(4)
-        linea_pts = l1.number_input("Linea puntos", value=0.0, step=0.5, min_value=0.0, key="props_l_pts")
-        linea_reb = l2.number_input("Linea rebotes", value=0.0, step=0.5, min_value=0.0, key="props_l_reb")
-        linea_ast = l3.number_input("Linea asist.", value=0.0, step=0.5, min_value=0.0, key="props_l_ast")
-        momio = l4.number_input("Momio (americano)", value=-110, step=5, key="props_momio")
-        st.session_state["props_log_this"] = st.checkbox(
+        log_this = st.checkbox(
             "Guardar esta prediccion en el historial de seguimiento (solo si hay juego real)", value=True)
         submitted = st.form_submit_button("Predecir", type="primary", use_container_width=True)
 
-    if not submitted:
-        return
+    # El resultado se guarda en session_state: asi, al mover una linea o el
+    # momio (lo que hace que Streamlit vuelva a correr la pagina), la
+    # prediccion sigue en pantalla sin volver a descargar nada.
+    if submitted:
+        result = _compute_props(jugador, equipo_jugador, equipo_rival, int(season), int(window), log_this)
+        if result is None:
+            st.session_state.pop("props_result", None)
+            return
+        st.session_state["props_result"] = result
+        st.session_state["props_run_id"] = st.session_state.get("props_run_id", 0) + 1
 
+    result = st.session_state.get("props_result")
+    if result:
+        _render_props_result(result, st.session_state.get("props_run_id", 0))
+
+
+def _compute_props(jugador, equipo_jugador, equipo_rival, season, window, log_this):
     team = n.resolve_team(equipo_jugador)
     opponent = n.resolve_team(equipo_rival)
 
-    player_id, player_name = n.resolve_player_espn(team["espn_id"], jugador, season=int(season))
+    player_id, player_name = n.resolve_player_espn(team["espn_id"], jugador, season=season)
     if not player_id:
-        st.error(f"No encontre a '{jugador}' en el roster de {team['full_name']} (temporada {int(season)}).")
-        return
+        st.error(f"No encontre a '{jugador}' en el roster de {team['full_name']} (temporada {season}).")
+        return None
 
-    bundle_points = load_bundle(os.path.join(APP_DIR, "model_props_points.joblib"))
-    bundle_rebounds = load_bundle(os.path.join(APP_DIR, "model_props_rebounds.joblib"))
-    bundle_assists = load_bundle(os.path.join(APP_DIR, "model_props_assists.joblib"))
-    if not (bundle_points and bundle_rebounds and bundle_assists):
+    bundles = {stat: load_bundle(os.path.join(APP_DIR, f"model_props_{stat}.joblib"))
+               for stat in ("points", "rebounds", "assists")}
+    if not all(bundles.values()):
         st.warning("Todavia no hay modelos de props entrenados - ve a 'Reentrenar modelos'.")
-        return
+        return None
 
     try:
         matchup = n.find_next_matchup(team, opponent)
@@ -404,56 +410,34 @@ def render_props_tab():
 
     with st.spinner(f"Calculando historial reciente de {player_name}..."):
         try:
-            recent = pp.player_recent_games(team["espn_id"], player_id, int(season), window=int(window))
-            rep_team = r.team_side_report(team, opponent, int(season), int(window), as_of_date=as_of_date)
-            rep_opp = r.team_side_report(opponent, team, int(season), int(window), as_of_date=as_of_date)
+            recent = pp.player_recent_games(team["espn_id"], player_id, season, window=window)
+            rep_team = r.team_side_report(team, opponent, season, window, as_of_date=as_of_date)
+            rep_opp = r.team_side_report(opponent, team, season, window, as_of_date=as_of_date)
         finally:
             n.flush_cache()
 
     if len(recent) < 3:
         st.warning(f"Muy pocos juegos recientes registrados ({len(recent)}) para predecir con confianza.")
-        return
+        return None
     if not rep_team["advanced"] or not rep_opp["advanced"]:
         st.warning("No hay suficientes datos de equipo recientes para calcular el contexto del rival.")
-        return
+        return None
 
     is_home = str(matchup.get("home_espn_id")) == str(team["espn_id"]) if matchup else None
     row = pp.build_props_row(recent, rep_team, rep_opp, is_home=is_home)
-    lineas = {"points": linea_pts or None, "rebounds": linea_reb or None, "assists": linea_ast or None}
 
-    st.subheader(f"{player_name} ({team['full_name']}) vs {opponent['full_name']}")
-    game_summaries = [f"{g['points']:.0f}p/{g['rebounds']:.0f}r/{g['assists']:.0f}a" for g in recent]
-    st.caption(f"Ultimos {len(recent)} juegos: " + ", ".join(game_summaries))
-    if rep_team.get("days_rest") is not None:
-        alerta = " ⚠️ BACK-TO-BACK" if rep_team.get("is_b2b") else ""
-        st.caption(f"Descanso del equipo: {rep_team['days_rest']} dia(s){alerta}")
-
-    cols = st.columns(3)
     preds = {}
-    for col, stat, bundle, label in [
-        (cols[0], "points", bundle_points, "Puntos"),
-        (cols[1], "rebounds", bundle_rebounds, "Rebotes"),
-        (cols[2], "assists", bundle_assists, "Asistencias"),
-    ]:
+    for stat, bundle in bundles.items():
         X = pd.DataFrame([row])[bundle["features"]]
-        predicho = bundle["model"].predict(X)[0]
-        mediana = statistics.median(g[stat] for g in recent)
-        over_under = "OVER" if predicho > mediana else "UNDER" if predicho < mediana else "IGUAL"
-        with col:
-            st.metric(f"{label} ({bundle['model_name']})", num(predicho),
-                      delta=f"{predicho - row[f'avg_{stat}']:+.1f} vs. promedio propio")
-            st.caption(f"Mediana ultimos {len(recent)}: {mediana:.1f} → {over_under}")
-            ou = pp.over_under(bundle, predicho, lineas[stat], momio)
-            if ou:
-                icono = "✅" if ou["edge"] > 0 else "➖"
-                st.markdown(f"**Linea {ou['line']}**: over {ou['p_over']:.0%} · under {ou['p_under']:.0%}  \n"
-                            f"{icono} {ou['pick']} {ou['p_pick']:.0%} vs {ou['p_needed']:.0%} que pide el momio "
-                            f"({ou['edge']:+.1%})")
-            elif lineas[stat]:
-                st.caption("Reentrena los modelos para ver probabilidades.")
-        preds[stat] = {"pred": predicho, "model_name": bundle["model_name"], "baseline": row[f"avg_{stat}"]}
+        preds[stat] = {
+            "pred": float(bundle["model"].predict(X)[0]),
+            "model_name": bundle["model_name"],
+            "baseline": row[f"avg_{stat}"],
+            "mediana": statistics.median(g[stat] for g in recent),
+            "sigma_curve": bundle.get("sigma_curve"),
+        }
 
-    if matchup and st.session_state.get("props_log_this", True):
+    if matchup and log_this:
         pt.log_prediction(pt.build_log_row(
             event_id=matchup["event_id"], game_date=matchup["date"],
             player_id=player_id, player_name=player_name,
@@ -465,11 +449,56 @@ def render_props_tab():
             pred_assists=preds["assists"]["pred"], model_assists=preds["assists"]["model_name"],
             baseline_assists=preds["assists"]["baseline"],
         ))
-        st.caption("Prediccion guardada en props_predictions_log.csv para evaluar despues del juego.")
+        st.toast("Prediccion guardada en el historial de seguimiento.")
 
-    st.caption("NOTA: sin linea real de casa de apuestas - la 'mediana reciente' es un umbral "
-               "calculado de los propios datos del jugador. Ajusta con la linea real que te ofrezca "
-               "tu casa de apuestas.")
+    return {
+        "player_name": player_name, "team": team["full_name"], "opponent": opponent["full_name"],
+        "recent": [{k: g[k] for k in ("points", "rebounds", "assists")} for g in recent],
+        "days_rest": rep_team.get("days_rest"), "is_b2b": rep_team.get("is_b2b"),
+        "preds": preds,
+    }
+
+
+def _render_props_result(res, run_id):
+    st.subheader(f"{res['player_name']} ({res['team']}) vs {res['opponent']}")
+    recent = res["recent"]
+    st.caption(f"Ultimos {len(recent)} juegos: " + ", ".join(
+        f"{g['points']:.0f}p/{g['rebounds']:.0f}r/{g['assists']:.0f}a" for g in recent))
+    if res.get("days_rest") is not None:
+        alerta = " ⚠️ BACK-TO-BACK" if res.get("is_b2b") else ""
+        st.caption(f"Descanso del equipo: {res['days_rest']} dia(s){alerta}")
+
+    momio = st.number_input("Momio over/under (americano)", value=-110, step=5,
+                             key=f"props_momio_{run_id}",
+                             help="El momio que te da tu casa. -110 es el mas comun.")
+
+    cols = st.columns(3)
+    for col, stat, label in [(cols[0], "points", "Puntos"), (cols[1], "rebounds", "Rebotes"),
+                             (cols[2], "assists", "Asistencias")]:
+        p = res["preds"][stat]
+        pred = p["pred"]
+        with col:
+            st.metric(f"{label} ({p['model_name']})", num(pred),
+                      delta=f"{pred - p['baseline']:+.1f} vs. promedio propio")
+            st.caption(f"Mediana ultimos {len(recent)}: {p['mediana']:.1f}")
+            # Linea inicial = la prediccion redondeada a .5 (lo mas cercano a
+            # "50/50" para el modelo). La key cambia en cada nueva prediccion
+            # para que el valor inicial se reinicie con el nuevo jugador.
+            default_line = max(0.5, (pred // 1) + 0.5)
+            line = st.number_input(f"Linea {label.lower()}", value=float(default_line), step=1.0,
+                                    min_value=0.5, format="%.1f", key=f"props_line_{stat}_{run_id}")
+            if not p.get("sigma_curve"):
+                st.caption("Reentrena los modelos para ver probabilidades.")
+                continue
+            ou = pp.over_under({"sigma_curve": p["sigma_curve"]}, pred, line, momio)
+            st.progress(ou["p_over"], text=f"Over {line:.1f}: **{ou['p_over']:.0%}**")
+            st.progress(ou["p_under"], text=f"Under {line:.1f}: **{ou['p_under']:.0%}**")
+            if ou["edge"] > 0:
+                st.success(f"{ou['pick']} {ou['p_pick']:.0%} vs {ou['p_needed']:.0%} que pide el momio "
+                           f"({ou['edge']:+.1%})")
+            else:
+                st.caption(f"Sin ventaja: lo mejor es {ou['pick']} {ou['p_pick']:.0%}, "
+                           f"el momio pide {ou['p_needed']:.0%}")
 
 
 # ---------------------------------------------------------------------------
