@@ -295,8 +295,13 @@ def collect_props_dataset(season, team_names=None, window=10, min_prior=5, max_g
     teams = n.TEAMS
     if team_names:
         teams = [n.resolve_team(name) for name in team_names]
-    all_team_series = td.collect_series_for_seasons(teams, seasons or [season], max_games=max_games,
-                                                    verbose=verbose)
+    all_team_series = td.load_reusable_series(teams, seasons or [season], max_games=max_games)
+    if all_team_series is not None:
+        print("  Reusando el historial de equipos del paso anterior (no se vuelve a descargar).",
+              file=sys.stderr)
+    else:
+        all_team_series = td.collect_series_for_seasons(teams, seasons or [season], max_games=max_games,
+                                                        verbose=verbose)
 
     bench_deadline = time.time() + bench_budget_min * 60 if bench_budget_min is not None else None
     player_games_by_team, starters_index = {}, {}

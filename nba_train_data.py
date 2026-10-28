@@ -131,6 +131,44 @@ def parse_seasons(seasons_arg, season):
     return [season]
 
 
+SERIES_REUSE_PATH = "cache/team_series_last_run.pkl"
+SERIES_REUSE_MAX_HOURS = 12
+
+
+def load_reusable_series(teams, seasons, max_games=None):
+    """Historial ya recolectado en ESTA corrida por el paso de equipos (se
+    guarda en SERIES_REUSE_PATH) - asi el paso de props no vuelve a recorrer
+    los 30 equipos. None si no aplica (otras temporadas/equipos o archivo viejo)."""
+    import os, pickle, time
+    if max_games is not None or not os.path.exists(SERIES_REUSE_PATH):
+        return None
+    if time.time() - os.path.getmtime(SERIES_REUSE_PATH) > SERIES_REUSE_MAX_HOURS * 3600:
+        return None
+    try:
+        with open(SERIES_REUSE_PATH, "rb") as f:
+            saved = pickle.load(f)
+    except Exception:
+        return None
+    if saved.get("seasons") != list(seasons):
+        return None
+    series = saved.get("series", {})
+    if not all(str(t["espn_id"]) in series for t in teams):
+        return None
+    return series
+
+
+def save_reusable_series(series, seasons, max_games=None):
+    import os, pickle
+    if max_games is not None:
+        return
+    try:
+        os.makedirs(os.path.dirname(SERIES_REUSE_PATH), exist_ok=True)
+        with open(SERIES_REUSE_PATH, "wb") as f:
+            pickle.dump({"seasons": list(seasons), "series": series}, f)
+    except Exception as e:
+        print(f"  (no se pudo guardar el historial para reusar: {e})", file=sys.stderr)
+
+
 def collect_series_for_seasons(teams, seasons, max_games=None, verbose=True):
     """Historial de cada equipo UNIENDO varias temporadas en orden de fecha
     (ej. toda la 2025-26 + lo que va de la 2026-27). Asi los primeros juegos
@@ -311,6 +349,7 @@ def collect_league_dataset(season, team_names=None, window=10, min_prior=5, verb
     if team_names:
         teams = [n.resolve_team(name) for name in team_names]
     all_series = collect_series_for_seasons(teams, seasons or [season], max_games=max_games, verbose=verbose)
+    save_reusable_series(all_series, seasons or [season], max_games=max_games)
 
     all_rows = []
     for team in teams:

@@ -99,7 +99,10 @@ def get_json(url, params=None, retries=3, timeout=25, min_interval=0.3):
             time.sleep(min_interval)
             return r.json()
         except requests.exceptions.HTTPError as e:
-            if e.response is not None and e.response.status_code in (403, 429):
+            # 403/429 = limite de ESPN; 404 = el recurso no existe (ej. stats de
+            # un jugador inactivo) - reintentar ninguno de los dos sirve, solo
+            # tira ~6 s por llamada.
+            if e.response is not None and e.response.status_code in (403, 404, 429):
                 raise
             last_err = e
             if attempt < retries - 1:
@@ -217,7 +220,10 @@ def espn_played_games(espn_team_id, season=None, last_n=None, request_delay=0.6)
     for eid in reversed(ids_to_check):
         if last_n and len(games) >= last_n:
             break
-        time.sleep(request_delay)
+        # La pausa es para no saturar a ESPN - si el juego ya esta en cache no
+        # se le pide nada, asi que no hace falta esperar.
+        if not competition_cached(eid):
+            time.sleep(request_delay)
         try:
             comp = espn_competition_detail(eid)
         except Exception as e:
@@ -268,6 +274,10 @@ def espn_recent_games(espn_team_id, season=None, last_n=10, request_delay=0.6):
         games = [g for g in prev if g["id"] not in seen] + games
         games.sort(key=lambda g: g.get("date") or "")
     return games
+
+
+def competition_cached(event_id):
+    return f"comp:{event_id}" in _load_summary_cache()
 
 
 def espn_competition_detail(event_id):
@@ -436,8 +446,17 @@ def espn_player_game_stats(event_id, espn_team_id, player_id):
     key = f"pstats:{event_id}:{espn_team_id}:{player_id}"
     if key in cache:
         return cache[key]
-    data = get_json(f"{ESPN_CORE_BASE}/events/{event_id}/competitions/{event_id}"
-                     f"/competitors/{espn_team_id}/roster/{player_id}/statistics/0")
+    try:
+        data = get_json(f"{ESPN_CORE_BASE}/events/{event_id}/competitions/{event_id}"
+                         f"/competitors/{espn_team_id}/roster/{player_id}/statistics/0")
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            # ESPN no tiene stats de ese jugador en ese juego (inactivo): se
+            # guarda vacio para no volver a pedirlo en cada corrida.
+            cache[key] = {}
+            _cache_dirty = True
+            return {}
+        raise
     out = {}
     for cat in data.get("splits", {}).get("categories", []):
         for s in cat.get("stats", []):
