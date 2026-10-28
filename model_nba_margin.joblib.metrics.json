@@ -1,17 +1,17 @@
 [
   {
     "modelo": "Baseline (formula margen local (spread))",
-    "mae": 12.9567,
-    "rmse": 16.2523
+    "mae": 12.8016,
+    "rmse": 16.1622
   },
   {
     "modelo": "Regresion lineal",
-    "mae": 12.4372,
-    "rmse": 15.9605
+    "mae": 13.1522,
+    "rmse": 16.7356
   },
   {
     "modelo": "Gradient Boosting",
-    "mae": 12.796,
-    "rmse": 16.2348
+    "mae": 12.8388,
+    "rmse": 16.4595
   }
 ]
