@@ -1,9 +1,10 @@
-timestamp,n_rows,n_players,modelo_points,mae_points,mae_points_baseline,modelo_rebounds,mae_rebounds,mae_rebounds_baseline,modelo_assists,mae_assists,mae_assists_baseline
-2026-09-04T18:14:51,10325,322,Regresion lineal,5.5016,5.602,Regresion lineal,2.1407,2.1518,Gradient Boosting,1.7256,1.7384
-2026-09-07T07:38:09,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384
-2026-09-10T15:09:29,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384
-2026-09-14T17:31:21,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384
-2026-09-18T15:15:38,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384
-2026-09-21T17:33:54,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384
-2026-09-25T16:15:29,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384
-2026-09-28T19:09:46,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384
+timestamp,n_rows,n_players,modelo_points,mae_points,mae_points_baseline,modelo_rebounds,mae_rebounds,mae_rebounds_baseline,modelo_assists,mae_assists,mae_assists_baseline,modelo_threes,mae_threes,mae_threes_baseline,modelo_pra,mae_pra,mae_pra_baseline,modelo_pr,mae_pr,mae_pr_baseline,modelo_pa,mae_pa,mae_pa_baseline,modelo_ra,mae_ra,mae_ra_baseline,modelo_steals,mae_steals,mae_steals_baseline,modelo_blocks,mae_blocks,mae_blocks_baseline,modelo_turnovers,mae_turnovers,mae_turnovers_baseline
+2026-09-04T18:14:51,10325,322,Regresion lineal,5.5016,5.602,Regresion lineal,2.1407,2.1518,Gradient Boosting,1.7256,1.7384,,,,,,,,,,,,,,,,,,,,,,,,
+2026-09-07T07:38:09,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384,,,,,,,,,,,,,,,,,,,,,,,,
+2026-09-10T15:09:29,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384,,,,,,,,,,,,,,,,,,,,,,,,
+2026-09-14T17:31:21,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384,,,,,,,,,,,,,,,,,,,,,,,,
+2026-09-18T15:15:38,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384,,,,,,,,,,,,,,,,,,,,,,,,
+2026-09-21T17:33:54,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384,,,,,,,,,,,,,,,,,,,,,,,,
+2026-09-25T16:15:29,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384,,,,,,,,,,,,,,,,,,,,,,,,
+2026-09-28T19:09:46,10325,322,Regresion lineal,5.5022,5.602,Regresion lineal,2.1412,2.1518,Gradient Boosting,1.7238,1.7384,,,,,,,,,,,,,,,,,,,,,,,,
+2026-10-28T23:00:23,17066,429,Regresion lineal,5.1236,5.2607,Gradient Boosting,2.0568,2.0844,Regresion lineal,1.5499,1.5887,Baseline (promedio movil propio),1.0059,1.0059,Regresion lineal,6.6022,6.8262,Regresion lineal,6.0813,6.2431,Regresion lineal,5.6336,5.8199,Regresion lineal,2.8405,2.9272,Gradient Boosting,0.7823,0.7954,Baseline (promedio movil propio),0.5723,0.5723,Regresion lineal,1.0101,1.0327
