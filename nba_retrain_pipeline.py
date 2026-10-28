@@ -75,6 +75,8 @@ def main():
                               "retrasa o salta corridas programadas sin avisar, y con un disparador diario + "
                               "este freno el peor caso es reentrenar un dia tarde, no varios dias de mas "
                               "(ver el mismo problema ya resuelto en apuestas_mlb/retrain_pipeline.py).")
+    parser.add_argument("--bench-budget-min", type=float, default=90,
+                         help="Minutos maximos para descargar stats NUEVAS de suplentes (default 90)")
     parser.add_argument("--force", action="store_true",
                          help="Ignora --min-days-between y reentrena de todos modos")
     args = parser.parse_args()
@@ -107,7 +109,8 @@ def main():
     if args.skip_props:
         print("\nPASO 3-4/4: omitidos (--skip-props)")
     else:
-        ok = run(["nba_props_data.py", *season_args, "--out", "training_data_props.csv"],
+        ok = run(["nba_props_data.py", *season_args, "--bench-budget-min", str(args.bench_budget_min),
+                  "--out", "training_data_props.csv"],
                  "PASO 3/4: Recolectando dataset historico de props de jugador (liga completa)")
         if ok:
             if not run(["nba_props_train.py", "--data", "training_data_props.csv"],

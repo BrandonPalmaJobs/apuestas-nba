@@ -39,7 +39,11 @@ on:
     # todo el mundo programa los suyos.
     - cron: "13 9 * * *"   # 03:13 am CDMX
     - cron: "43 10 * * *"  # 04:43 am CDMX (respaldo)
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      bench_budget:
+        description: "Minutos maximos para descargar suplentes nuevos (menos = corrida mas rapida)"
+        default: "90"
 
 permissions:
   contents: write
@@ -59,7 +63,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Reentrenar (recolecta equipo + props, entrena los 6 modelos)
-        run: python nba_retrain_pipeline.py --min-days-between 0.5
+        run: python nba_retrain_pipeline.py --min-days-between 0.5 --bench-budget-min ${{ github.event.inputs.bench_budget || '90' }}
 
       - name: Guardar modelos, datos y cache actualizados en el repo
         # always(): aunque el reentrenamiento falle (y la corrida quede en rojo),
