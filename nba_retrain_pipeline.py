@@ -77,11 +77,14 @@ def main():
                               "(ver el mismo problema ya resuelto en apuestas_mlb/retrain_pipeline.py).")
     parser.add_argument("--bench-budget-min", type=float, default=90,
                          help="Minutos maximos para descargar stats NUEVAS de suplentes (default 90)")
+    parser.add_argument("--solo-entrenar", action="store_true",
+                         help="No descarga nada: reentrena con training_data_nba.csv y training_data_props.csv "
+                              "ya guardados (minutos en vez de horas)")
     parser.add_argument("--force", action="store_true",
                          help="Ignora --min-days-between y reentrena de todos modos")
     args = parser.parse_args()
 
-    if not args.force:
+    if not args.force and not args.solo_entrenar:
         days = days_since_last_retrain()
         if days is not None and days < args.min_days_between:
             print(f"Ultimo reentrenamiento hace {days:.1f} dia(s) (< {args.min_days_between}) - "
@@ -95,6 +98,17 @@ def main():
     season_args = ["--season", str(season), "--seasons", ",".join(map(str, seasons)),
                    "--window", str(args.window), "--min-prior", str(args.min_prior)]
     failed = []
+
+    if args.solo_entrenar:
+        failed = []
+        for script, data, desc in (("nba_train.py", "training_data_nba.csv", "modelos de equipo"),
+                                   ("nba_props_train.py", "training_data_props.csv", "modelos de props")):
+            if not run([script, "--data", data], f"Solo entrenar: {desc} (sin descargar)"):
+                failed.append(desc)
+        if failed:
+            print(f"FALLARON: {', '.join(failed)}")
+            sys.exit(1)
+        return
 
     ok = run(["nba_train_data.py", *season_args, "--out", "training_data_nba.csv"],
              "PASO 1/4: Recolectando dataset historico de equipos (liga completa)")

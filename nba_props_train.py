@@ -124,10 +124,15 @@ def evaluate_regression(name, y_true, y_pred):
     }
 
 
-def print_feature_importance(model, X_test, y_test, features, title, n_repeats=10):
+def print_feature_importance(model, X_test, y_test, features, title, n_repeats=3, max_rows=3000):
     if isinstance(model, NaiveBaselineRegressor):
         print(f"\n{title}: se omite (el modelo ganador fue el baseline, no usa las demas features).")
         return
+    # Es solo informativo (no cambia el modelo): con 11 props, ~70 variables y
+    # miles de filas, la version completa tardaba horas. Una muestra basta.
+    if len(X_test) > max_rows:
+        X_test = X_test.sample(max_rows, random_state=0)
+        y_test = y_test.loc[X_test.index]
     try:
         result = permutation_importance(model, X_test, y_test, scoring="neg_mean_absolute_error",
                                          n_repeats=n_repeats, random_state=0)
@@ -244,4 +249,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Se corre main() desde el modulo IMPORTADO (no desde __main__) para que
+    # las clases de baseline que se guardan con joblib sean las mismas que
+    # se cargan despues - si no, al ganar el baseline truena el guardado
+    # ("Can't pickle ... not the same object").
+    import nba_props_train
+    nba_props_train.main()

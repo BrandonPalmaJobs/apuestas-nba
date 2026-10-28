@@ -44,6 +44,10 @@ on:
       bench_budget:
         description: "Minutos maximos para descargar suplentes nuevos (menos = corrida mas rapida)"
         default: "90"
+      solo_entrenar:
+        description: "Solo entrenar con los datos ya guardados (sin descargar nada)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -63,7 +67,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Reentrenar (recolecta equipo + props, entrena los 6 modelos)
-        run: python nba_retrain_pipeline.py --min-days-between 0.5 --bench-budget-min ${{ github.event.inputs.bench_budget || '90' }}
+        run: python nba_retrain_pipeline.py --min-days-between 0.5 --bench-budget-min ${{ github.event.inputs.bench_budget || '90' }} ${{ github.event.inputs.solo_entrenar == 'true' && '--solo-entrenar' || '' }}
 
       - name: Guardar modelos, datos y cache actualizados en el repo
         # always(): aunque el reentrenamiento falle (y la corrida quede en rojo),
