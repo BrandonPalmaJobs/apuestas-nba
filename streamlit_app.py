@@ -432,7 +432,7 @@ def _compute_props(jugador, equipo_jugador, equipo_rival, season, window, log_th
             opp_allowed = None
         finally:
             n.flush_cache()
-    row = pp.build_props_row(recent, rep_team, rep_opp, is_home=is_home, opp_allowed=opp_allowed)
+    row = pp.build_props_row(recent, rep_team, rep_opp, is_home=is_home, opp_allowed=opp_allowed, season=season)
 
     raw = pp.predict_row(bundles, row)
     preds = {k: {"pred": v, "model_name": bundles[k]["model_name"], "baseline": row[pc.avg_feature(k)],

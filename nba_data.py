@@ -252,6 +252,8 @@ def espn_recent_games(espn_team_id, season=None, last_n=10, request_delay=0.6):
     con espn_played_games directo."""
     season = season or current_nba_season()
     games = espn_played_games(espn_team_id, season=season, last_n=last_n, request_delay=request_delay)
+    for g in games:
+        g["season"] = season
     missing = last_n - len(games) if last_n else 0
     if missing > 0:
         try:
@@ -260,6 +262,8 @@ def espn_recent_games(espn_team_id, season=None, last_n=10, request_delay=0.6):
         except Exception as e:
             print(f"  No se pudo completar con la temporada anterior: {e}", file=sys.stderr)
             prev = []
+        for g in prev:
+            g["season"] = season - 1
         seen = {g["id"] for g in games}
         games = [g for g in prev if g["id"] not in seen] + games
         games.sort(key=lambda g: g.get("date") or "")

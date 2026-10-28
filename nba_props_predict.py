@@ -37,7 +37,7 @@ APP_DIR = os.path.dirname(os.path.abspath(__file__))
 # ---------------------------------------------------------------------------
 
 def _game_entry(g, entry, stats):
-    return {"date": g["date"], **pc.normalize_stats(stats),
+    return {"date": g["date"], "season": g.get("season"), **pc.normalize_stats(stats),
             "starter": bool(entry["starter"]), "group": n.position_group(entry)}
 
 
@@ -136,7 +136,7 @@ def opp_allowed_by_position(opponent, season, group, window=WINDOW, _cache=None)
 # Features y prediccion
 # ---------------------------------------------------------------------------
 
-def build_props_row(recent, rep_team, rep_opp, is_home=None, opp_allowed=None):
+def build_props_row(recent, rep_team, rep_opp, is_home=None, opp_allowed=None, season=None):
     """Fila de features para los modelos de props - la MISMA para el CLI, la
     app y la tanda del dia, con las mismas columnas que arma
     nba_props_data.py al entrenar (las que un modelo viejo no use se ignoran)."""
@@ -157,6 +157,7 @@ def build_props_row(recent, rep_team, rep_opp, is_home=None, opp_allowed=None):
     for k in list(pc.BASE_STATS) + list(pc.COMBOS):
         row[pc.avg_feature(k)] = r._avg([pc.stat_value(g, k) for g in recent])
         row[f"{pc.avg_feature(k)}_last3"] = r._avg([pc.stat_value(g, k) for g in last3])
+    row.update(pdata.season_features(recent, season or n.current_nba_season()))
     for k in pc.ALLOWED_STATS:
         row[pc.allow_feature(k)] = (opp_allowed or {}).get(k)
     return row
@@ -268,7 +269,8 @@ def predict_slate(bundles, season=None, game_date=None, window=WINDOW, min_minut
                                                       _cache=allowed_cache)
                 except Exception:
                     allowed = None
-                row = build_props_row(recent, rep_team, rep_opp, is_home=is_home, opp_allowed=allowed)
+                row = build_props_row(recent, rep_team, rep_opp, is_home=is_home, opp_allowed=allowed,
+                                      season=season)
                 preds = predict_row(bundles, row)
                 rows.append({
                     "player_id": pid, "player": info["name"], "team": team["full_name"],
@@ -365,7 +367,7 @@ def main():
         return
 
     is_home = str(matchup.get("home_espn_id")) == str(team["espn_id"]) if matchup else None
-    row = build_props_row(recent, rep_team, rep_opp, is_home=is_home, opp_allowed=opp_allowed)
+    row = build_props_row(recent, rep_team, rep_opp, is_home=is_home, opp_allowed=opp_allowed, season=season)
     preds = predict_row(bundles, row)
     lines = _parse_lines(args.linea)
 

@@ -39,7 +39,10 @@ from sklearn.preprocessing import StandardScaler
 FEATURES = (
     [pc.avg_feature(k) for k in list(pc.BASE_STATS) + list(pc.COMBOS)]
     + [f"{pc.avg_feature(k)}_last3" for k in list(pc.BASE_STATS) + list(pc.COMBOS)]
-    + ["start_rate", "team_off_rtg", "team_pace", "opp_def_rtg", "opp_pace",
+    # Prioridad a ESTA temporada (ver nba_props_data.season_features)
+    + [f"{pc.avg_feature(k)}_season" for k in list(pc.BASE_STATS) + list(pc.COMBOS)]
+    + [f"{pc.avg_feature(k)}_w" for k in list(pc.BASE_STATS) + list(pc.COMBOS)]
+    + ["season_games", "start_rate", "team_off_rtg", "team_pace", "opp_def_rtg", "opp_pace",
        "days_rest", "b2b", "is_home", "teammates_out", "proj_margin", "proj_blowout"]
     + [pc.allow_feature(k) for k in pc.ALLOWED_STATS]
 )

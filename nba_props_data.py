@@ -84,13 +84,49 @@ def collect_player_games(team, team_series, max_games=None, bench_deadline=None)
             if not stats or not stats.get("minutes"):
                 continue
             group = n.position_group(entry)
-            pg = {"event_id": g["event_id"], "date": g["date"], **pc.normalize_stats(stats),
-                  "starter": bool(entry["starter"]), "group": group}
+            pg = {"event_id": g["event_id"], "date": g["date"], "season": g.get("season"),
+                  **pc.normalize_stats(stats), "starter": bool(entry["starter"]), "group": group}
             player_games.setdefault(pid, {"name": entry["name"], "games": []})["games"].append(pg)
             if entry["starter"]:
                 starters.append(pg)
         starters_by_event[(str(g["event_id"]), str(team["espn_id"]))] = starters
     return player_games, starters_by_event
+
+
+# Peso de un juego de la temporada ANTERIOR frente a uno de la actual, y
+# cuanto pierde de peso cada juego hacia atras (0.85 -> el juego de hace 5
+# pesa ~44% del mas reciente).
+PREV_SEASON_WEIGHT = 0.5
+RECENCY_DECAY = 0.85
+
+
+def season_features(prior, cur_season):
+    """Variables que le dan prioridad a ESTA temporada, a partir de los
+    juegos previos de la ventana (mas reciente al final):
+      - season_games: cuantos de esos juegos son de esta temporada.
+      - avg_<prop>_season: promedio SOLO con juegos de esta temporada
+        (vacio si aun no juega ninguno).
+      - avg_<prop>_w: promedio ponderado - recientes pesan mas, y los de la
+        temporada pasada la mitad.
+    El modelo aprende solo cuanto creerle a la temporada actual segun
+    cuantos juegos lleva. Misma funcion al entrenar y al predecir."""
+    cur = [g for g in prior if g.get("season") == cur_season]
+    weights = []
+    for age, g in enumerate(reversed(prior)):
+        w = RECENCY_DECAY ** age
+        if g.get("season") is not None and g.get("season") != cur_season:
+            w *= PREV_SEASON_WEIGHT
+        weights.append(w)
+    weights.reverse()
+    out = {"season_games": len(cur)}
+    for k in list(pc.BASE_STATS) + list(pc.COMBOS):
+        vals = [pc.stat_value(g, k) for g in cur]
+        vals = [v for v in vals if v is not None]
+        out[f"{pc.avg_feature(k)}_season"] = sum(vals) / len(vals) if vals else None
+        pairs = [(pc.stat_value(g, k), w) for g, w in zip(prior, weights) if pc.stat_value(g, k) is not None]
+        tot = sum(w for _, w in pairs)
+        out[f"{pc.avg_feature(k)}_w"] = sum(v * w for v, w in pairs) / tot if tot else None
+    return out
 
 
 def main_group(pgames):
@@ -191,6 +227,7 @@ def build_player_rows(team, season, all_team_series, player_games, starters_inde
             for k, v in avgs.items():
                 row[pc.avg_feature(k)] = v
                 row[f"{pc.avg_feature(k)}_last3"] = td.r._avg([pc.stat_value(x, k) for x in last3])
+            row.update(season_features(prior, g_team.get("season", season)))
             for k in pc.ALLOWED_STATS:
                 row[pc.allow_feature(k)] = allowed.get(k)
             for k in pc.TARGETS + ["minutes"]:
