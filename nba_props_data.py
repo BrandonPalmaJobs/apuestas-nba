@@ -39,6 +39,7 @@ import pandas as pd
 
 import nba_data as n
 import nba_train_data as td
+import props_config as pc
 
 
 # Jugadores con menos minutos promedio que esto no generan filas: sus
@@ -83,12 +84,8 @@ def collect_player_games(team, team_series, max_games=None, bench_deadline=None)
             if not stats or not stats.get("minutes"):
                 continue
             group = n.position_group(entry)
-            pg = {
-                "event_id": g["event_id"], "date": g["date"],
-                "points": stats.get("points"), "rebounds": stats.get("rebounds"),
-                "assists": stats.get("assists"), "minutes": stats.get("minutes"),
-                "starter": bool(entry["starter"]), "group": group,
-            }
+            pg = {"event_id": g["event_id"], "date": g["date"], **pc.normalize_stats(stats),
+                  "starter": bool(entry["starter"]), "group": group}
             player_games.setdefault(pid, {"name": entry["name"], "games": []})["games"].append(pg)
             if entry["starter"]:
                 starters.append(pg)
@@ -110,7 +107,7 @@ def allowed_per36(entries, group):
     mins = sum(e["minutes"] for e in sel)
     if mins < 60:
         return None
-    return {stat: sum((e.get(stat) or 0) for e in sel) / mins * 36 for stat in ("points", "rebounds", "assists")}
+    return {stat: sum((e.get(stat) or 0) for e in sel) / mins * 36 for stat in pc.ALLOWED_STATS}
 
 
 def opp_allowed_asof(opp_id, opp_series, before_date, window, starters_index, group):
@@ -138,11 +135,9 @@ def build_player_rows(team, season, all_team_series, player_games, starters_inde
             if i < min_prior:
                 continue
             prior = pgames[max(0, i - window):i]
-            avg_points = td.r._avg([x["points"] for x in prior])
-            avg_rebounds = td.r._avg([x["rebounds"] for x in prior])
-            avg_assists = td.r._avg([x["assists"] for x in prior])
-            avg_minutes = td.r._avg([x["minutes"] for x in prior])
-            if None in (avg_points, avg_rebounds, avg_assists, avg_minutes):
+            avgs = {k: td.r._avg([pc.stat_value(x, k) for x in prior]) for k in list(pc.BASE_STATS) + list(pc.COMBOS)}
+            avg_minutes = avgs["minutes"]
+            if any(avgs[k] is None for k in ("points", "rebounds", "assists", "minutes")):
                 continue
             if avg_minutes < MIN_AVG_MINUTES:
                 continue
@@ -178,32 +173,29 @@ def build_player_rows(team, season, all_team_series, player_games, starters_inde
             proj_margin = td.r.matchup_margin(team_feats, opp_feats)
             allowed = opp_allowed_asof(opp_id, opp_series, pg["date"], window, starters_index, group) or {}
 
-            rows.append({
+            row = {
                 "event_id": pg["event_id"], "date": pg["date"],
                 "season": g_team.get("season", season),
                 "player_id": pid, "player_name": info["name"], "team": team["abbreviation"],
                 "position_group": group,
-                "avg_points": avg_points, "avg_rebounds": avg_rebounds,
-                "avg_assists": avg_assists, "avg_minutes": avg_minutes,
-                "avg_points_last3": td.r._avg([x["points"] for x in last3]),
-                "avg_rebounds_last3": td.r._avg([x["rebounds"] for x in last3]),
-                "avg_assists_last3": td.r._avg([x["assists"] for x in last3]),
-                "avg_minutes_last3": td.r._avg([x["minutes"] for x in last3]),
                 "start_rate": sum(x["starter"] for x in prior) / len(prior),
                 "team_off_rtg": team_feats["off_rtg"], "team_pace": team_feats["pace"],
                 "opp_def_rtg": opp_feats["def_rtg"], "opp_pace": opp_feats["pace"],
-                "opp_allow_pts36_pos": allowed.get("points"),
-                "opp_allow_reb36_pos": allowed.get("rebounds"),
-                "opp_allow_ast36_pos": allowed.get("assists"),
                 "days_rest": days_rest, "b2b": b2b,
                 "is_home": int(bool(g_team.get("is_home"))),
                 "teammates_out": teammates_out,
                 "proj_margin": proj_margin,
                 "proj_blowout": abs(proj_margin) if proj_margin is not None else None,
                 "n_prior": len(prior),
-                "label_points": pg["points"], "label_rebounds": pg["rebounds"],
-                "label_assists": pg["assists"], "label_minutes": pg["minutes"],
-            })
+            }
+            for k, v in avgs.items():
+                row[pc.avg_feature(k)] = v
+                row[f"{pc.avg_feature(k)}_last3"] = td.r._avg([pc.stat_value(x, k) for x in last3])
+            for k in pc.ALLOWED_STATS:
+                row[pc.allow_feature(k)] = allowed.get(k)
+            for k in pc.TARGETS + ["minutes"]:
+                row[f"label_{k}"] = pc.stat_value(pg, k)
+            rows.append(row)
     if verbose:
         n_starters = sum(1 for info in player_games.values() if any(x["starter"] for x in info["games"]))
         print(f"  {team['full_name']}: {len(player_games)} jugadores ({n_starters} titulares alguna vez), "

@@ -22,6 +22,8 @@ import joblib
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
+
+import props_config as pc
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.inspection import permutation_importance
@@ -30,16 +32,20 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-FEATURES = ["avg_points", "avg_rebounds", "avg_assists", "avg_minutes",
-            "avg_points_last3", "avg_rebounds_last3", "avg_assists_last3", "avg_minutes_last3",
-            "team_off_rtg", "team_pace", "opp_def_rtg", "opp_pace",
-            "days_rest", "b2b",
-            # Contexto de minutos/uso: local o visita, companeros habituales
-            # ausentes, y margen proyectado (las palizas recortan minutos).
-            "is_home", "teammates_out", "proj_margin", "proj_blowout",
-            # Rol (que tanto arranca de titular) y lo que la defensa rival le
-            # permite a titulares de su misma posicion, por 36 minutos.
-            "start_rate", "opp_allow_pts36_pos", "opp_allow_reb36_pos", "opp_allow_ast36_pos"]
+# Contexto comun a todos los props: promedios moviles (10 y ultimos 3 juegos)
+# de cada estadistica, rol (que tanto arranca), equipo/rival, descanso,
+# local/visita, companeros ausentes, margen proyectado (palizas) y lo que la
+# defensa rival permite por 36 min a titulares de su posicion.
+FEATURES = (
+    [pc.avg_feature(k) for k in list(pc.BASE_STATS) + list(pc.COMBOS)]
+    + [f"{pc.avg_feature(k)}_last3" for k in list(pc.BASE_STATS) + list(pc.COMBOS)]
+    + ["start_rate", "team_off_rtg", "team_pace", "opp_def_rtg", "opp_pace",
+       "days_rest", "b2b", "is_home", "teammates_out", "proj_margin", "proj_blowout"]
+    + [pc.allow_feature(k) for k in pc.ALLOWED_STATS]
+)
+
+# (llave, columna de label, baseline = su promedio movil, titulo)
+STATS = [(k, f"label_{k}", pc.avg_feature(k), pc.LABELS[k]) for k in pc.TARGETS]
 
 
 def over_threshold(line):
@@ -84,12 +90,6 @@ def evaluate_over_under(pred_fit, y_fit, pred_eval, y_eval, line_eval):
             if confident.any() else None,
         "pct_jugadas_confianza_60": round(float(confident.mean()), 4),
     }
-
-STATS = [
-    ("points", "label_points", "avg_points", "Puntos"),
-    ("rebounds", "label_rebounds", "avg_rebounds", "Rebotes"),
-    ("assists", "label_assists", "avg_assists", "Asistencias"),
-]
 
 
 class NaiveBaselineRegressor:
@@ -202,29 +202,33 @@ def log_training_history(n_rows, n_players, results_by_stat, history_path="train
         row[f"modelo_{stat_key}"] = best["modelo"]
         row[f"mae_{stat_key}"] = best["mae"]
         row[f"mae_{stat_key}_baseline"] = naive["mae"]
-    file_exists = os.path.exists(history_path)
-    pd.DataFrame([row]).to_csv(history_path, mode="a", header=not file_exists, index=False)
+    # Al agregar props nuevos cambian las columnas: se reescribe el archivo
+    # con la union de columnas en vez de anexar una fila desalineada.
+    new = pd.DataFrame([row])
+    if os.path.exists(history_path):
+        new = pd.concat([pd.read_csv(history_path), new], ignore_index=True)
+    new.to_csv(history_path, index=False)
     return row
 
 
 def main():
     parser = argparse.ArgumentParser(description="Entrena los modelos de props de jugador NBA")
     parser.add_argument("--data", default="training_data_props.csv")
-    parser.add_argument("--model-points-out", default="model_props_points.joblib")
-    parser.add_argument("--model-rebounds-out", default="model_props_rebounds.joblib")
-    parser.add_argument("--model-assists-out", default="model_props_assists.joblib")
     parser.add_argument("--test-frac", type=float, default=0.2)
     args = parser.parse_args()
 
     df = pd.read_csv(args.data)
     print(f"Dataset: {len(df)} filas, {df['player_id'].nunique()} jugadores unicos")
 
-    outs = {"points": args.model_points_out, "rebounds": args.model_rebounds_out, "assists": args.model_assists_out}
     results_by_stat = {}
     for stat_key, label, naive_col, title in STATS:
-        results = train_stat(df, args.test_frac, outs[stat_key], label, naive_col, title)
+        if label not in df.columns or naive_col not in df.columns:
+            print(f"\n{title}: se omite (el dataset no trae {label} - recolecta de nuevo con nba_props_data.py)")
+            continue
+        out_path = f"model_props_{stat_key}.joblib"
+        results = train_stat(df.dropna(subset=[label]), args.test_frac, out_path, label, naive_col, title)
         results_by_stat[stat_key] = results
-        with open(outs[stat_key] + ".metrics.json", "w") as f:
+        with open(out_path + ".metrics.json", "w") as f:
             json.dump(results, f, indent=2)
 
     history_row = log_training_history(len(df), df["player_id"].nunique(), results_by_stat)

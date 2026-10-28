@@ -513,6 +513,57 @@ def find_next_matchup(team_a, team_b, days_ahead=14):
     return None
 
 
+def team_by_espn_id(espn_id):
+    return next((t for t in TEAMS if str(t["espn_id"]) == str(espn_id)), None)
+
+
+def _game_day_et(iso_date):
+    """Fecha del juego en hora del Este (la que usa la NBA): un juego de las
+    8pm ET aparece en ESPN como 00:00Z del dia SIGUIENTE."""
+    from zoneinfo import ZoneInfo
+    dt_utc = datetime.fromisoformat(iso_date.replace("Z", "+00:00"))
+    return dt_utc.astimezone(ZoneInfo("America/New_York")).date()
+
+
+def games_on_date(day=None):
+    """Juegos de la NBA programados para `day` (hoy por default, fecha del
+    Este): [{"event_id", "date", "home_espn_id", "away_espn_id"}].
+    Primero intenta el scoreboard de ESPN (1 llamada); si falla, recorre el
+    calendario de los 30 equipos (el mismo endpoint de find_next_matchup)."""
+    day = day or date.today()
+    if isinstance(day, str):
+        day = date.fromisoformat(day)
+    games = {}
+
+    def add(e):
+        comp = e.get("competitions", [{}])[0]
+        competitors = comp.get("competitors", [])
+        home = next((c for c in competitors if c.get("homeAway") == "home"), None)
+        away = next((c for c in competitors if c.get("homeAway") == "away"), None)
+        if not home or not away or not e.get("date") or _game_day_et(e["date"]) != day:
+            return
+        games[str(e["id"])] = {
+            "event_id": str(e["id"]), "date": day.isoformat(),
+            "home_espn_id": str((home.get("team") or {}).get("id") or home.get("id")),
+            "away_espn_id": str((away.get("team") or {}).get("id") or away.get("id")),
+        }
+
+    try:
+        data = get_json(f"{ESPN_BASE}/scoreboard", params={"dates": day.strftime("%Y%m%d")})
+        for e in data.get("events", []):
+            add(e)
+    except Exception as ex:
+        print(f"  scoreboard de ESPN fallo ({ex}) - uso el calendario de cada equipo", file=sys.stderr)
+    if not games:
+        for t in TEAMS:
+            try:
+                for e in get_json(f"{ESPN_BASE}/teams/{t['espn_id']}/schedule").get("events", []):
+                    add(e)
+            except Exception:
+                continue
+    return sorted(games.values(), key=lambda g: g["event_id"])
+
+
 # ---------------------------------------------------------------------------
 # pbpstats.com: On/Off Net Rating (impacto de lesionados) y tiro por zona
 # ---------------------------------------------------------------------------

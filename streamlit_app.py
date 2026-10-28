@@ -36,6 +36,7 @@ import nba_investor_emails as ie
 import nba_investors as inv
 import nba_props_predict as pp
 import nba_props_track as pt
+import props_config as pc
 import nba_report as r
 import nba_track as track
 
@@ -396,9 +397,9 @@ def _compute_props(jugador, equipo_jugador, equipo_rival, season, window, log_th
         st.error(f"No encontre a '{jugador}' en el roster de {team['full_name']} (temporada {season}).")
         return None
 
-    bundles = {stat: load_bundle(os.path.join(APP_DIR, f"model_props_{stat}.joblib"))
-               for stat in ("points", "rebounds", "assists")}
-    if not all(bundles.values()):
+    bundles = {k: load_bundle(os.path.join(APP_DIR, f"model_props_{k}.joblib")) for k in pc.TARGETS}
+    bundles = {k: b for k, b in bundles.items() if b}
+    if not bundles:
         st.warning("Todavia no hay modelos de props entrenados - ve a 'Reentrenar modelos'.")
         return None
 
@@ -433,18 +434,13 @@ def _compute_props(jugador, equipo_jugador, equipo_rival, season, window, log_th
             n.flush_cache()
     row = pp.build_props_row(recent, rep_team, rep_opp, is_home=is_home, opp_allowed=opp_allowed)
 
-    preds = {}
-    for stat, bundle in bundles.items():
-        X = pd.DataFrame([row])[bundle["features"]]
-        preds[stat] = {
-            "pred": float(bundle["model"].predict(X)[0]),
-            "model_name": bundle["model_name"],
-            "baseline": row[f"avg_{stat}"],
-            "mediana": statistics.median(g[stat] for g in recent),
-            "sigma_curve": bundle.get("sigma_curve"),
-        }
+    raw = pp.predict_row(bundles, row)
+    preds = {k: {"pred": v, "model_name": bundles[k]["model_name"], "baseline": row[pc.avg_feature(k)],
+                 "mediana": statistics.median(pc.stat_value(g, k) for g in recent),
+                 "sigma_curve": bundles[k].get("sigma_curve")}
+             for k, v in raw.items()}
 
-    if matchup and log_this:
+    if matchup and log_this and all(k in preds for k in ("points", "rebounds", "assists")):
         pt.log_prediction(pt.build_log_row(
             event_id=matchup["event_id"], game_date=matchup["date"],
             player_id=player_id, player_name=player_name,
@@ -499,9 +495,11 @@ def _render_props_result(res, run_id):
                              key=f"props_momio_{run_id}",
                              help="El momio que te da tu casa. -110 es el mas comun.")
 
-    cols = st.columns(3)
-    for col, stat, label in [(cols[0], "points", "Puntos"), (cols[1], "rebounds", "Rebotes"),
-                             (cols[2], "assists", "Asistencias")]:
+    for idx, stat in enumerate(res["preds"]):
+        if idx % 3 == 0:
+            cols = st.columns(3)
+        col = cols[idx % 3]
+        label = pc.LABELS[stat]
         p = res["preds"][stat]
         pred = p["pred"]
         with col:
@@ -511,8 +509,7 @@ def _render_props_result(res, run_id):
             # Linea inicial = la prediccion redondeada a .5 (lo mas cercano a
             # "50/50" para el modelo). La key cambia en cada nueva prediccion
             # para que el valor inicial se reinicie con el nuevo jugador.
-            default_line = max(0.5, (pred // 1) + 0.5)
-            line = st.number_input(f"Linea {label.lower()}", value=float(default_line), step=1.0,
+            line = st.number_input(f"Linea {label.lower()}", value=float(pp.default_line(pred)), step=1.0,
                                     min_value=0.5, format="%.1f", key=f"props_line_{stat}_{run_id}")
             if not p.get("sigma_curve"):
                 st.caption("Reentrena los modelos para ver probabilidades.")
@@ -532,6 +529,138 @@ def _render_props_result(res, run_id):
                     if btn.button(f"Aposte {side.lower()}", key=f"bet_{stat}_{side}_{run_id}",
                                   use_container_width=True):
                         _register_bet(res, stat, p, line, side, momio, ou)
+
+
+# ---------------------------------------------------------------------------
+# Props de TODOS los juegos del dia
+# ---------------------------------------------------------------------------
+
+def render_slate_tab():
+    st.header("📅 Props de todos los juegos de hoy")
+    st.caption("Predice todos los props de todos los jugadores (12+ min) de los juegos del dia. "
+               "Escribe la linea de tu casa en la columna 'Linea' y se recalculan las probabilidades.")
+
+    bundles = {k: load_bundle(os.path.join(APP_DIR, f"model_props_{k}.joblib")) for k in pc.TARGETS}
+    bundles = {k: b for k, b in bundles.items() if b}
+    if not bundles:
+        st.warning("Todavia no hay modelos de props entrenados - ve a 'Reentrenar modelos'.")
+        return
+
+    c1, c2 = st.columns([2, 1])
+    dia = c1.date_input("Dia de los juegos", value=date.today(), key="slate_day")
+    c2.write("")
+    if c2.button("Cargar juegos", type="primary", use_container_width=True):
+        bar = st.progress(0.0, text="Buscando juegos...")
+        try:
+            df = pp.predict_slate(bundles, game_date=dia,
+                                  on_progress=lambda t, f: bar.progress(min(max(f, 0.0), 1.0), text=t))
+        except Exception as e:
+            bar.empty()
+            st.error(f"No se pudieron cargar los juegos: {e}")
+            return
+        bar.empty()
+        if df.empty:
+            st.info("No hay juegos ese dia.")
+            st.session_state.pop("slate_df", None)
+            return
+        st.session_state["slate_df"] = df
+        st.session_state["slate_run"] = st.session_state.get("slate_run", 0) + 1
+        for k in pc.TARGETS:
+            st.session_state.pop(f"slate_lines_{k}", None)
+
+    df = st.session_state.get("slate_df")
+    if df is None:
+        st.info("Toca 'Cargar juegos'. La primera vez del dia tarda unos minutos (descarga los juegos "
+                "recientes de cada equipo); despues queda en cache.")
+        return
+    run = st.session_state.get("slate_run", 0)
+
+    st.caption(f"{len(df)} jugadores · {df['event_id'].nunique()} juegos")
+
+    available = [k for k in pc.TARGETS if f"pred_{k}" in df.columns]
+    f1, f2, f3 = st.columns([2, 2, 1])
+    stat = f1.selectbox("Prop", available, format_func=lambda k: pc.LABELS[k], key="slate_stat")
+    equipos = f2.multiselect("Equipos", sorted(df["team_abbr"].unique()), key="slate_teams")
+    momio = f3.number_input("Momio", value=-110, step=5, key="slate_momio")
+    solo_valor = st.toggle("Solo jugadas con ventaja (ordenadas de mayor a menor)", key="slate_value")
+
+    view = df if not equipos else df[df["team_abbr"].isin(equipos)]
+    lines_key = f"slate_lines_{stat}"
+    lines = st.session_state.setdefault(lines_key, {})
+    curve = bundles[stat].get("sigma_curve")
+
+    table = []
+    for _, row in view.iterrows():
+        pred = row[f"pred_{stat}"]
+        line = lines.get(row["player_id"], pp.default_line(pred))
+        ou = pp.over_under({"sigma_curve": curve}, pred, line, momio) if curve else None
+        table.append({
+            "player_id": row["player_id"], "Jugador": row["player"],
+            "Partido": f"{row['team_abbr']} vs {row['opp_abbr']}", "Min": row["min"],
+            "Prediccion": round(pred, 1), "Promedio": round(row[f"avg_{stat}"], 1)
+            if pd.notna(row.get(f"avg_{stat}")) else None,
+            "Linea": float(line),
+            "Over %": round(ou["p_over"] * 100) if ou else None,
+            "Under %": round(ou["p_under"] * 100) if ou else None,
+            "Mejor": ou["pick"] if ou else "",
+            "Ventaja %": round(ou["edge"] * 100, 1) if ou else None,
+            "Aposte": "",
+        })
+    tdf = pd.DataFrame(table)
+    if solo_valor and "Ventaja %" in tdf and curve:
+        tdf = tdf[tdf["Ventaja %"] > 0].sort_values("Ventaja %", ascending=False)
+    if tdf.empty:
+        st.info("Ninguna jugada con ventaja con estas lineas.")
+        return
+    if not curve:
+        st.caption("Reentrena los modelos para ver probabilidades.")
+
+    edited = st.data_editor(
+        tdf, key=f"slate_editor_{stat}_{run}_{len(lines)}", hide_index=True, use_container_width=True,
+        column_order=["Jugador", "Partido", "Min", "Prediccion", "Promedio", "Linea", "Over %", "Under %",
+                      "Mejor", "Ventaja %", "Aposte"],
+        disabled=["Jugador", "Partido", "Min", "Prediccion", "Promedio", "Over %", "Under %", "Mejor",
+                  "Ventaja %"],
+        column_config={
+            "Linea": st.column_config.NumberColumn(step=0.5, format="%.1f", min_value=0.5),
+            "Over %": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%d%%"),
+            "Under %": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%d%%"),
+            "Ventaja %": st.column_config.NumberColumn(format="%+.1f"),
+            "Aposte": st.column_config.SelectboxColumn(options=["", "OVER", "UNDER"],
+                                                       help="Marca lo que apostaste y registralo abajo"),
+        },
+    )
+
+    # Si cambiaste alguna linea, se guarda y se recalcula la tabla.
+    changed = False
+    for _, e in edited.iterrows():
+        orig = tdf.loc[tdf["player_id"] == e["player_id"], "Linea"].iloc[0]
+        if pd.notna(e["Linea"]) and float(e["Linea"]) != float(orig):
+            lines[e["player_id"]] = float(e["Linea"])
+            changed = True
+    if changed:
+        st.rerun()
+
+    marcadas = edited[edited["Aposte"].isin(["OVER", "UNDER"])]
+    if len(marcadas) and st.button(f"Registrar {len(marcadas)} apuesta(s) marcada(s)", type="primary"):
+        for _, e in marcadas.iterrows():
+            src = view[view["player_id"] == e["player_id"]].iloc[0]
+            pred = src[f"pred_{stat}"]
+            ou = pp.over_under({"sigma_curve": curve}, pred, float(e["Linea"]), momio) if curve else None
+            p_side = (ou["p_over"] if e["Aposte"] == "OVER" else ou["p_under"]) if ou else None
+            p_needed = pp.american_to_prob(momio)
+            pt.log_bet({
+                "event_id": src["event_id"], "game_date": src["game_date"], "player_id": src["player_id"],
+                "player_name": src["player"], "team": src["team"], "team_espn_id": src["team_espn_id"],
+                "opponent": src["opponent"], "stat": stat, "line": float(e["Linea"]), "side": e["Aposte"],
+                "odds": momio, "pred": round(pred, 2), "model": bundles[stat]["model_name"],
+                "p_model": None if p_side is None else round(p_side, 4), "p_needed": round(p_needed, 4),
+                "edge": None if p_side is None else round(p_side - p_needed, 4),
+            }, log_path=os.path.join(APP_DIR, pt.BETS_PATH))
+        ok, msg = git_sync.commit_and_push([pt.BETS_PATH], f"Apuestas registradas ({len(marcadas)})",
+                                           st.secrets, APP_DIR)
+        (st.success if ok else st.warning)(
+            f"{len(marcadas)} apuesta(s) registrada(s)." + ("" if ok else f" Ojo: {msg}"))
 
 
 # ---------------------------------------------------------------------------
@@ -669,9 +798,8 @@ def _run_retrain_nba(skip_props):
         "model_nba_margin.joblib", "model_nba_margin.joblib.metrics.json",
         "model_nba_win.joblib", "model_nba_win.joblib.metrics.json",
         "training_data_nba.csv", "training_history_nba.csv",
-        "model_props_points.joblib", "model_props_points.joblib.metrics.json",
-        "model_props_rebounds.joblib", "model_props_rebounds.joblib.metrics.json",
-        "model_props_assists.joblib", "model_props_assists.joblib.metrics.json",
+        *[f for k in pc.TARGETS for f in (f"model_props_{k}.joblib", f"model_props_{k}.joblib.metrics.json")
+          if os.path.exists(os.path.join(APP_DIR, f))],
         "training_data_props.csv", "training_history_props.csv",
         "cache/game_summaries.json",
     ]
@@ -1111,6 +1239,7 @@ def main():
     st.sidebar.title("🏀 NBA Apuestas")
     section = st.sidebar.radio("Seccion", [
         "📋 Reporte del juego",
+        "📅 Props de hoy (todos)",
         "🏀 Props de jugador",
         "📈 Evaluar predicciones",
         "🔁 Reentrenar modelos",
@@ -1120,6 +1249,8 @@ def main():
 
     if section == "📋 Reporte del juego":
         render_reporte_tab()
+    elif section == "📅 Props de hoy (todos)":
+        render_slate_tab()
     elif section == "🏀 Props de jugador":
         render_props_tab()
     elif section == "📈 Evaluar predicciones":

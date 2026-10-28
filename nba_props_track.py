@@ -23,6 +23,7 @@ from datetime import date
 import pandas as pd
 
 import nba_data as n
+import props_config as pc
 
 LOG_COLUMNS = [
     "logged_date", "event_id", "game_date", "player_id", "player_name",
@@ -144,7 +145,7 @@ BET_COLUMNS = [
     "stat", "line", "side", "odds", "pred", "model", "p_model", "p_needed", "edge",
     "actual", "result", "profit_units", "evaluated",
 ]
-STAT_LABELS = {"points": "Puntos", "rebounds": "Rebotes", "assists": "Asistencias"}
+STAT_LABELS = {k: pc.LABELS[k] for k in pc.TARGETS}
 
 
 def log_bet(row, log_path=BETS_PATH):
