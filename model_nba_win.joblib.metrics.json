@@ -1,20 +1,20 @@
 [
   {
     "modelo": "Baseline (formula -> logistica)",
-    "accuracy": 0.6955,
-    "auc": 0.7721,
-    "brier": 0.1927
+    "accuracy": 0.698,
+    "auc": 0.7739,
+    "brier": 0.1921
   },
   {
     "modelo": "Regresion logistica",
-    "accuracy": 0.6872,
-    "auc": 0.7462,
-    "brier": 0.198
+    "accuracy": 0.6939,
+    "auc": 0.7351,
+    "brier": 0.203
   },
   {
     "modelo": "Gradient Boosting",
-    "accuracy": 0.7037,
-    "auc": 0.7347,
-    "brier": 0.206
+    "accuracy": 0.6939,
+    "auc": 0.7276,
+    "brier": 0.2068
   }
 ]
