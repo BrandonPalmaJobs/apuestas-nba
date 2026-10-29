@@ -2,3 +2,4 @@ logged_at,event_id,game_date,player_id,player_name,team,team_espn_id,opponent,st
 2026-10-29T15:58:40,401909895,2026-10-30,4683021,Deni Avdija,Portland Trail Blazers,22,Memphis Grizzlies,points,14.5,OVER,-950,21.64,Regresion lineal,0.8108,0.9048,-0.094,,,,False
 2026-10-29T16:00:26,401909895,2026-10-30,4065733,Ty Jerome,Memphis Grizzlies,29,Portland Trail Blazers,points,17.5,OVER,-390,27.06,Regresion lineal,0.8811,0.7959,0.0851,,,,False
 2026-10-29T16:05:43,401909893,2026-10-30,4432158,Evan Mobley,Cleveland Cavaliers,5,Atlanta Hawks,points,11.5,OVER,-500,18.48,Regresion lineal,0.825,0.8333,-0.0084,,,,False
+2026-10-29T16:06:00,401909893,2026-10-30,4432158,Evan Mobley,Cleveland Cavaliers,5,Atlanta Hawks,rebounds,5.5,OVER,-500,9.54,Gradient Boosting,0.8686,0.8333,0.0353,,,,False
