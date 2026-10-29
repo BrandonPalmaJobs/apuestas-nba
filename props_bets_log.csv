@@ -1,2 +1,2 @@
 logged_at,event_id,game_date,player_id,player_name,team,team_espn_id,opponent,stat,line,side,odds,pred,model,p_model,p_needed,edge,actual,result,profit_units,evaluated
-2026-10-29T15:58:10,401909895,2026-10-30,4683021,Deni Avdija,Portland Trail Blazers,22,Memphis Grizzlies,points,14.5,OVER,-110,21.64,Regresion lineal,0.8108,0.5238,0.287,,,,False
+2026-10-29T15:58:40,401909895,2026-10-30,4683021,Deni Avdija,Portland Trail Blazers,22,Memphis Grizzlies,points,14.5,OVER,-950,21.64,Regresion lineal,0.8108,0.9048,-0.094,,,,False
