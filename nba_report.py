@@ -326,16 +326,17 @@ def team_side_report(team, opponent, season, last_n, lesionado_override=None, as
     # saber a quien vale la pena forzar con --lesionado-a/-b (el impacto
     # numerico via On/Off solo se calcula para el jugador forzado, no para
     # toda la lista, porque cada consulta a pbpstats cuesta una llamada).
-    injuries_auto = []
+    injuries_auto, injuries_detail, injuries_error = [], [], None
     try:
-        for entry in n.espn_team_injuries(team["espn_id"]):
-            for inj in entry.get("injuries", entry.get("athletes", [])):
-                name = (inj.get("athlete") or {}).get("displayName") or inj.get("name")
-                status = (inj.get("status") or inj.get("type", {}).get("description"))
-                if name:
-                    injuries_auto.append(f"{name} ({status or 'N/D'})")
+        injuries_detail, errs = n.espn_team_injuries(team["espn_id"])
+        if errs and not injuries_detail:
+            injuries_error = "; ".join(errs)
+        for inj in injuries_detail:
+            injuries_auto.append(f"{inj['name']} ({inj['status']})")
     except Exception as e:
-        print(f"    (no se pudo descargar lista de lesionados: {e})", file=sys.stderr)
+        injuries_error = str(e)
+    if injuries_error:
+        print(f"    (no se pudo consultar lesionados: {injuries_error})", file=sys.stderr)
 
     # injured_names alimenta la EXCLUSION dentro de probable_lineup (no solo
     # una advertencia despues) - si el titular habitual esta en el reporte
@@ -369,13 +370,15 @@ def team_side_report(team, opponent, season, last_n, lesionado_override=None, as
     def _is_out(name):
         st_ = status_by_name.get(str(name).lower(), "")
         return any(x in st_ for x in ("(out", "(doubtful", "(susp"))
-    missing_regulars = (sum(1 for nm in lineup_probable["excluidos_por_lesion"] if _is_out(nm))
+    missing_regulars = (sum(1 for p in lineup_probable["excluidos_por_lesion"]
+                            if _is_out(p["name"] if isinstance(p, dict) else p))
                         if lineup_probable else None)
 
     return {
         "team": team, "opponent": opponent, "advanced": advanced,
         "quarter_profile": quarter_profile, "n_games": len(per_game),
-        "injuries_auto": injuries_auto, "lineup_probable": lineup_probable,
+        "injuries_auto": injuries_auto, "injuries_detail": injuries_detail, "injuries_error": injuries_error,
+        "lineup_probable": lineup_probable,
         "days_rest": days_rest, "is_b2b": is_b2b, "injury_impact": injury_impact,
         "missing_regulars": missing_regulars, "season_feats": season_feats,
     }
@@ -503,7 +506,10 @@ def print_team_block(rep, projection, quarters):
     if rep.get("injuries_auto"):
         print(f"  Lesionados (reporte de ESPN): {', '.join(rep['injuries_auto'][:8])}")
     else:
-        print("  Lesionados: ninguno reportado por ESPN ahora mismo (o no se pudo consultar).")
+        if rep.get("injuries_error"):
+            print(f"  Lesionados: NO SE PUDO CONSULTAR ESPN ({rep['injuries_error']})")
+        else:
+            print("  Lesionados: ninguno reportado por ESPN.")
 
     if rep.get("injury_impact"):
         print(f"  LESIONADO forzado: {rep['injury_impact']['player']} - impacto On/Off: "

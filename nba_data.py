@@ -562,11 +562,133 @@ def resolve_player_espn(espn_team_id, name_query, season=None):
     return None, None
 
 
+def _injury_from_obj(obj):
+    """Convierte un objeto de lesion de ESPN (cualquiera de sus formatos) a
+    {name, status, detail, return_date}. None si no es una lesion."""
+    athlete = obj.get("athlete") if isinstance(obj.get("athlete"), dict) else {}
+    name = athlete.get("displayName") or athlete.get("fullName") or obj.get("displayName") or obj.get("name")
+    status = obj.get("status")
+    if isinstance(status, dict):
+        status = status.get("name") or status.get("description") or status.get("type")
+    typ = obj.get("type") if isinstance(obj.get("type"), dict) else {}
+    status = status or typ.get("description") or typ.get("name")
+    if not name or not status:
+        return None
+    details = obj.get("details") if isinstance(obj.get("details"), dict) else {}
+    detail = " ".join(str(x) for x in (details.get("type"), details.get("location"), details.get("detail"))
+                      if x and str(x).lower() != "other") or obj.get("shortComment") or ""
+    return {"name": name, "status": str(status).strip().title(), "detail": str(detail)[:80],
+            "return_date": details.get("returnDate") or "",
+            "athlete_id": str(athlete.get("id") or "")}
+
+
+def _walk_injuries(node, team_id=None, out=None):
+    """Recorre cualquier JSON de ESPN y junta las lesiones, recordando de que
+    equipo son (el endpoint de toda la liga las agrupa por equipo)."""
+    if out is None:
+        out = []
+    if isinstance(node, list):
+        for x in node:
+            _walk_injuries(x, team_id, out)
+    elif isinstance(node, dict):
+        if isinstance(node.get("athlete"), dict) and ("status" in node or "type" in node):
+            inj = _injury_from_obj(node)
+            if inj:
+                inj["team_id"] = str(team_id) if team_id is not None else None
+                out.append(inj)
+            return out
+        # Formato del roster: el jugador trae su propia lista "injuries" y
+        # cada lesion NO repite al jugador adentro.
+        if isinstance(node.get("injuries"), list) and node.get("displayName") and not node.get("abbreviation"):
+            loose = [x for x in node["injuries"] if isinstance(x, dict) and "athlete" not in x]
+            for x in loose:
+                inj = _injury_from_obj({**x, "athlete": {"displayName": node["displayName"],
+                                                         "id": node.get("id")}})
+                if inj:
+                    inj["team_id"] = str(team_id) if team_id is not None else None
+                    out.append(inj)
+            if loose:
+                return out
+        tid = team_id
+        if "injuries" in node and node.get("id") is not None and (node.get("displayName") or node.get("abbreviation")):
+            tid = node["id"]
+        if isinstance(node.get("team"), dict) and node["team"].get("id"):
+            tid = node["team"]["id"]
+        for v in node.values():
+            if isinstance(v, (list, dict)):
+                _walk_injuries(v, tid, out)
+    return out
+
+
+_INJURY_CACHE = {"at": 0, "league": None}
+INJURY_CACHE_MIN = 10
+
+
+def espn_league_injuries():
+    """Reporte de lesionados de TODA la liga (una llamada), agrupado por
+    equipo: {team_id: [lesiones]}. Se guarda en memoria 10 min para no
+    repetir la consulta en cada equipo del dia."""
+    if _INJURY_CACHE["league"] is not None and time.time() - _INJURY_CACHE["at"] < INJURY_CACHE_MIN * 60:
+        return _INJURY_CACHE["league"]
+    data = get_json(f"{ESPN_BASE}/injuries")
+    by_team = {}
+    for inj in _walk_injuries(data):
+        by_team.setdefault(inj["team_id"], []).append(inj)
+    _INJURY_CACHE.update(at=time.time(), league=by_team)
+    return by_team
+
+
+def _core_team_injuries(espn_team_id):
+    data = get_json(f"{ESPN_CORE_BASE}/teams/{espn_team_id}/injuries", params={"limit": 50})
+    out = []
+    for item in data.get("items", []):
+        ref = (item.get("$ref") or "").replace("http://", "https://")
+        try:
+            inj = get_json(ref) if ref else item
+            ath = inj.get("athlete") or {}
+            if ath.get("$ref") and not ath.get("displayName"):
+                inj["athlete"] = get_json(ath["$ref"].replace("http://", "https://"))
+        except Exception:
+            continue
+        parsed = _injury_from_obj(inj)
+        if parsed:
+            out.append(parsed)
+    return out
+
+
 def espn_team_injuries(espn_team_id):
-    """Lesionados actuales de un equipo (roster + status), directo de ESPN -
-    no requiere parsear ningun PDF."""
-    data = get_json(f"{ESPN_BASE}/teams/{espn_team_id}/injuries")
-    return data.get("injuries", [])
+    """Lesionados ACTUALES de un equipo, juntando varias fuentes de ESPN (si
+    una falla o viene vacia, se usan las demas):
+      1. reporte de toda la liga (site /injuries)
+      2. reporte del equipo (site /teams/{id}/injuries)
+      3. roster del equipo, que trae la lesion de cada jugador
+      4. API 'core' del equipo
+    Regresa (lesiones, errores). Lista vacia SIN errores = de verdad no hay
+    lesionados; con errores = no se pudo confirmar."""
+    found, errors = {}, []
+
+    def add(items, source):
+        for inj in items:
+            key = inj["name"].lower()
+            if key not in found:
+                found[key] = {**inj, "source": source}
+
+    sources = [
+        ("liga", lambda: espn_league_injuries().get(str(espn_team_id), [])),
+        ("equipo", lambda: _walk_injuries(get_json(f"{ESPN_BASE}/teams/{espn_team_id}/injuries"))),
+        ("roster", lambda: _walk_injuries(get_json(f"{ESPN_BASE}/teams/{espn_team_id}/roster"))),
+        ("core", lambda: _core_team_injuries(espn_team_id)),
+    ]
+    for source, fn in sources:
+        if source == "core" and found:
+            continue  # la API 'core' es lenta (una llamada por jugador): solo si nada mas trajo datos
+        try:
+            add(fn(), source)
+        except Exception as e:
+            errors.append(f"{source}: {str(e)[:120]}")
+    if found:
+        errors = []  # alguna fuente si respondio: la lista es confiable
+    return list(found.values()), errors
 
 
 def find_next_matchup(team_a, team_b, days_ahead=14):

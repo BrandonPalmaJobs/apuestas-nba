@@ -173,12 +173,25 @@ def render_team_block(rep, projection, quarters, col):
         else:
             st.caption("Alineación probable: N/D (sin juegos recientes suficientes).")
 
-        if rep.get("injuries_auto"):
+        detail = rep.get("injuries_detail") or []
+        if detail:
+            st.markdown(f"**Lesionados ({len(detail)}, reporte de ESPN al momento):**")
+            iconos = {"out": "🔴", "doubtful": "🟠", "questionable": "🟡", "day-to-day": "🟡", "probable": "🟢"}
+            for inj in sorted(detail, key=lambda x: list(iconos).index(x["status"].lower())
+                              if x["status"].lower() in iconos else 9):
+                icono = iconos.get(inj["status"].lower(), "⚪")
+                extra = " · ".join(x for x in (inj.get("detail"), f"regreso aprox. {inj['return_date'][:10]}"
+                                                 if inj.get("return_date") else "") if x)
+                st.caption(f"{icono} **{inj['name']}** — {inj['status']}" + (f" ({extra})" if extra else ""))
+        elif rep.get("injuries_auto"):
             st.markdown("**Lesionados (reporte de ESPN):**")
             for inj in rep["injuries_auto"]:
                 st.caption(f"- {inj}")
+        elif rep.get("injuries_error"):
+            st.error(f"No se pudo consultar el reporte de lesionados de ESPN. Revisalo a mano antes de apostar. "
+                     f"({rep['injuries_error'][:150]})")
         else:
-            st.caption("Lesionados: ninguno reportado por ESPN ahora mismo (o no se pudo consultar).")
+            st.caption("Lesionados: ninguno reportado por ESPN.")
         if rep.get("injury_impact"):
             st.caption(f"LESIONADO forzado: {rep['injury_impact']['player']} - "
                        f"impacto On/Off: {rep['injury_impact']['raw']}")
