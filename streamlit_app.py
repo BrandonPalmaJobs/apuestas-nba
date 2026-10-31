@@ -609,6 +609,65 @@ def render_slate_tab():
 
     st.caption(f"{len(df)} jugadores · {df['event_id'].nunique()} juegos")
 
+    tab_picks, tab_todos = st.tabs(["⭐ Picks recomendados", "📋 Todos los jugadores"])
+    with tab_picks:
+        _render_recommended_picks(df, bundles, run)
+    with tab_todos:
+        _render_slate_table(df, bundles, run)
+
+
+def _render_recommended_picks(df, bundles, run):
+    if "recent_points" not in df.columns:
+        st.info("Vuelve a tocar 'Cargar juegos' para calcular los picks recomendados.")
+        return
+    c1, c2 = st.columns([2, 1])
+    per_team = c1.radio("Picks por equipo", [2, 3], index=1, horizontal=True, key="picks_per_team")
+    momio = c2.number_input("Momio", value=-110, step=5, key="picks_momio",
+                            help="Las lineas seguras suelen pagar menos (ej. -150). Pon el que te de tu casa.")
+    picks = pp.recommend_picks(df, bundles, per_team=per_team)
+    st.caption(
+        f"Solo jugadores con {pp.PICK_MIN_MINUTES}+ minutos estables y sin reporte de lesion propio. Cada pick "
+        f"pasa DOS pruebas: el modelo le da {pp.PICK_MIN_PROB:.0%}+ y la rompio en {pp.PICK_MIN_HIT:.0%}+ de "
+        f"sus juegos recientes. La linea es la MAS ALTA que cumple las dos: compara con la de tu casa - si la "
+        f"de tu casa es mas baja (over) o mas alta (under), mejor todavia.")
+    if picks.empty:
+        st.info("Ningun jugador pasa las dos pruebas hoy. Es preferible no forzar picks.")
+        return
+
+    for event_id in picks["event_id"].unique():
+        g = picks[picks["event_id"] == event_id]
+        teams = list(dict.fromkeys(g["team_abbr"]))
+        st.subheader(" vs ".join(teams) if len(teams) > 1 else f"{teams[0]} vs {g.iloc[0]['opp_abbr']}")
+        for team in teams:
+            st.markdown(f"**{g[g['team_abbr'] == team].iloc[0]['team']}**")
+            for i, p in g[g["team_abbr"] == team].iterrows():
+                label = pc.LABELS[p["prop"]]
+                lado = "Mas de" if p["side"] == "OVER" else "Menos de"
+                col1, col2 = st.columns([4, 1])
+                col1.markdown(
+                    f"⭐ **{p['player']}** — {lado} **{p['line']:.1f} {label.lower()}**  \n"
+                    f"Modelo {p['p_model']:.0%} · la rompio **{p['hits']} de {p['n']}** · "
+                    f"prediccion {p['pred']:.1f} (promedio {p['avg']:.1f}) · {p['min']:.0f} min"
+                    + (f"  \n🚑 Fuera en su equipo: {p['companeros_fuera']}" if p["companeros_fuera"] else ""))
+                if col2.button("Aposte", key=f"pick_bet_{run}_{p['player_id']}_{p['prop']}",
+                               use_container_width=True):
+                    p_needed = pp.american_to_prob(momio)
+                    pt.log_bet({
+                        "event_id": p["event_id"], "game_date": p["game_date"], "player_id": p["player_id"],
+                        "player_name": p["player"], "team": p["team"], "team_espn_id": p["team_espn_id"],
+                        "opponent": p["opponent"], "stat": p["prop"], "line": p["line"], "side": p["side"],
+                        "odds": momio, "pred": round(p["pred"], 2), "model": "pick recomendado",
+                        "p_model": round(p["p_model"], 4), "p_needed": round(p_needed, 4),
+                        "edge": round(p["p_model"] - p_needed, 4),
+                    }, log_path=os.path.join(APP_DIR, pt.BETS_PATH))
+                    ok, msg = git_sync.commit_and_push([pt.BETS_PATH], f"Pick registrado: {p['player']}",
+                                                       st.secrets, APP_DIR)
+                    st.toast(f"Registrado: {p['player']} {lado.lower()} {p['line']} {label.lower()}"
+                             + ("" if ok else " (no se pudo guardar en GitHub)"))
+        st.divider()
+
+
+def _render_slate_table(df, bundles, run):
     available = [k for k in pc.TARGETS if f"pred_{k}" in df.columns]
     f1, f2, f3 = st.columns([2, 2, 1])
     stat = f1.selectbox("Prop", available, format_func=lambda k: pc.LABELS[k], key="slate_stat")

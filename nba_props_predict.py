@@ -331,9 +331,118 @@ def predict_slate(bundles, season=None, game_date=None, window=WINDOW, min_minut
                     "pts_libres_misma_pos": round(row["vacated_points_same_pos"], 1),
                     **{f"pred_{k}": v for k, v in preds.items()},
                     **{f"avg_{k}": row.get(pc.avg_feature(k)) for k in preds},
+                    # Para los picks recomendados: juego por juego reciente
+                    # (mas reciente al final) y estado propio en el reporte.
+                    **{f"recent_{k}": [pc.stat_value(g, k) for g in recent] for k in preds},
+                    "recent_min": [g["minutes"] for g in recent],
+                    "season_games": row.get("season_games"),
+                    "estado_propio": next((st for nm, st in parse_injuries(rep_team)
+                                           if _name_match(nm, info["name"].lower())), ""),
                 })
     n.flush_cache()
     return pd.DataFrame(rows).sort_values(["game_date", "team", "min"], ascending=[True, True, False])
+
+
+# ---------------------------------------------------------------------------
+# Picks recomendados: los mas solidos de cada equipo
+# ---------------------------------------------------------------------------
+
+# Props que se consideran para picks (los de linea chica - robos, bloqueos,
+# perdidas - dependen de 1 jugada y son demasiado volatiles para "seguros").
+PICK_PROPS = ["points", "rebounds", "assists", "threes", "pra", "pr", "pa", "ra"]
+# Linea minima para que el pick valga la pena (un "over 2.5 puntos" es casi
+# seguro pero ninguna casa lo paga).
+PICK_MIN_LINE = {"points": 9.5, "rebounds": 3.5, "assists": 2.5, "threes": 1.5,
+                 "pra": 14.5, "pr": 11.5, "pa": 11.5, "ra": 5.5}
+PICK_MIN_PROB = 0.68        # probabilidad minima del modelo
+PICK_MIN_HIT = 0.70         # minimo de juegos recientes en que paso la linea
+PICK_MIN_GAMES = 5
+PICK_MIN_MINUTES = 22
+PICK_MAX_MIN_CV = 0.25      # minutos estables: desviacion <= 25% del promedio
+PICK_EXCLUDE_STATUS = ("out", "doubtful", "questionable", "day-to-day", "susp")
+
+
+# La linea del pick no puede estar demasiado lejos del promedio del jugador:
+# las casas ponen su linea cerca del promedio, y una linea regalada (over 3.5
+# rebotes a alguien que promedia 8) no existe o no paga nada.
+PICK_OVER_MIN_FRAC = 0.80   # over: linea >= 80% de su promedio
+PICK_UNDER_MAX_FRAC = 1.20  # under: linea <= 120% de su promedio
+
+
+def _pick_for_prop(pred, values, curve, min_line, avg=None):
+    """Por cada lado, la linea MAS EXIGENTE (mas alta para over, mas baja
+    para under) que el jugador rompe con seguridad segun DOS pruebas a la
+    vez: probabilidad del modelo y cuantas veces la paso en sus juegos
+    recientes. Regresa el lado mas solido o None."""
+    vals = [v for v in values if v is not None]
+    if len(vals) < PICK_MIN_GAMES or not curve:
+        return None
+    avg = avg if avg else sum(vals) / len(vals)
+    best = None
+    top = int(max(vals + [pred])) + 1
+    for side in ("OVER", "UNDER"):
+        side_best = None
+        for base in range(0, top + 1):
+            line = base + 0.5
+            if line < min_line:
+                continue
+            if side == "OVER" and line < PICK_OVER_MIN_FRAC * avg:
+                continue
+            if side == "UNDER" and line > PICK_UNDER_MAX_FRAC * avg:
+                continue
+            p_over = ptr.prob_over(pred, line, curve)
+            p_model = p_over if side == "OVER" else 1 - p_over
+            hits = sum(v > line for v in vals) if side == "OVER" else sum(v < line for v in vals)
+            if p_model < PICK_MIN_PROB or hits / len(vals) < PICK_MIN_HIT:
+                continue
+            hit_adj = (hits + 1) / (len(vals) + 2)  # 8/10 pesa mas que 4/5
+            cand = {"side": side, "line": line, "p_model": p_model, "hits": hits, "n": len(vals),
+                    "score": min(p_model, hit_adj)}
+            if side_best is None or (line > side_best["line"] if side == "OVER" else line < side_best["line"]):
+                side_best = cand
+        if side_best and (best is None or side_best["score"] > best["score"]):
+            best = side_best
+    return best
+
+
+def recommend_picks(df, bundles, per_team=3):
+    """Los `per_team` picks mas solidos de cada equipo (maximo uno por
+    jugador), a partir de la tabla de predict_slate. Solo jugadores con
+    minutos altos y estables, sin reporte de lesion propio."""
+    import statistics as stx
+    picks = []
+    for _, row in df.iterrows():
+        status = str(row.get("estado_propio") or "").lower()
+        if any(x in status for x in PICK_EXCLUDE_STATUS):
+            continue
+        mins = [m for m in (row.get("recent_min") or []) if m]
+        if len(mins) < PICK_MIN_GAMES or stx.mean(mins) < PICK_MIN_MINUTES:
+            continue
+        if stx.pstdev(mins) / stx.mean(mins) > PICK_MAX_MIN_CV:
+            continue
+        best = None
+        for k in PICK_PROPS:
+            if k not in bundles or f"pred_{k}" not in row:
+                continue
+            cand = _pick_for_prop(row[f"pred_{k}"], row.get(f"recent_{k}") or [],
+                                  bundles[k].get("sigma_curve"), PICK_MIN_LINE[k], avg=row.get(f"avg_{k}"))
+            if cand and (best is None or cand["score"] > best["score"]):
+                best = {**cand, "prop": k}
+        if best:
+            picks.append({
+                "player_id": row["player_id"], "player": row["player"], "team": row["team"],
+                "team_abbr": row["team_abbr"], "team_espn_id": row["team_espn_id"],
+                "opponent": row["opponent"], "opp_abbr": row["opp_abbr"], "event_id": row["event_id"],
+                "game_date": row["game_date"], "min": row["min"], "prop": best["prop"],
+                "side": best["side"], "line": best["line"], "pred": row[f"pred_{best['prop']}"],
+                "avg": row.get(f"avg_{best['prop']}"), "p_model": best["p_model"],
+                "hits": best["hits"], "n": best["n"], "score": best["score"],
+                "companeros_fuera": row.get("companeros_fuera") or "",
+            })
+    if not picks:
+        return pd.DataFrame()
+    out = pd.DataFrame(picks).sort_values("score", ascending=False)
+    return out.groupby("team_abbr", sort=False).head(per_team).reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
