@@ -1,17 +1,17 @@
 [
   {
     "modelo": "Baseline (formula puntos totales)",
-    "mae": 15.6721,
-    "rmse": 20.0783
+    "mae": 15.4052,
+    "rmse": 19.6054
   },
   {
     "modelo": "Regresion lineal",
-    "mae": 16.2196,
-    "rmse": 20.9285
+    "mae": 15.9312,
+    "rmse": 20.3064
   },
   {
     "modelo": "Gradient Boosting",
-    "mae": 16.0515,
-    "rmse": 20.448
+    "mae": 16.1308,
+    "rmse": 20.4156
   }
 ]
