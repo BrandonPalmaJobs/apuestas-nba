@@ -6,20 +6,20 @@
   },
   {
     "modelo": "Regresion lineal",
-    "mae": 0.7783,
-    "rmse": 0.993
+    "mae": 0.7785,
+    "rmse": 0.9931
   },
   {
     "modelo": "Gradient Boosting",
-    "mae": 0.7741,
-    "rmse": 0.9935
+    "mae": 0.7744,
+    "rmse": 0.9936
   },
   {
     "modelo": "over_under (Gradient Boosting)",
-    "brier": 0.2341,
+    "brier": 0.2347,
     "brier_moneda": 0.25,
-    "acierto_over_under": 0.5827,
-    "acierto_si_confianza_60": 0.6652,
-    "pct_jugadas_confianza_60": 0.5295
+    "acierto_over_under": 0.5822,
+    "acierto_si_confianza_60": 0.6621,
+    "pct_jugadas_confianza_60": 0.5355
   }
 ]

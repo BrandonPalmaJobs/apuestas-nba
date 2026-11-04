@@ -6,13 +6,13 @@
   },
   {
     "modelo": "Regresion lineal",
-    "mae": 0.5611,
-    "rmse": 0.7658
+    "mae": 0.5608,
+    "rmse": 0.7655
   },
   {
     "modelo": "Gradient Boosting",
-    "mae": 0.5645,
-    "rmse": 0.759
+    "mae": 0.5662,
+    "rmse": 0.7604
   },
   {
     "modelo": "over_under (Baseline (promedio movil propio))",
