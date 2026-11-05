@@ -1,25 +1,25 @@
 [
   {
     "modelo": "Baseline (promedio movil propio)",
-    "mae": 2.0532,
-    "rmse": 2.7116
+    "mae": 2.0593,
+    "rmse": 2.7277
   },
   {
     "modelo": "Regresion lineal",
-    "mae": 2.0053,
-    "rmse": 2.6237
+    "mae": 2.0142,
+    "rmse": 2.6425
   },
   {
     "modelo": "Gradient Boosting",
-    "mae": 2.0205,
-    "rmse": 2.636
+    "mae": 2.0305,
+    "rmse": 2.656
   },
   {
     "modelo": "over_under (Regresion lineal)",
-    "brier": 0.2374,
+    "brier": 0.24,
     "brier_moneda": 0.25,
-    "acierto_over_under": 0.5877,
-    "acierto_si_confianza_60": 0.6633,
-    "pct_jugadas_confianza_60": 0.4082
+    "acierto_over_under": 0.5804,
+    "acierto_si_confianza_60": 0.6468,
+    "pct_jugadas_confianza_60": 0.4024
   }
 ]
