@@ -227,7 +227,9 @@ def predict_row(bundles, row):
     preds = {}
     for k, bundle in bundles.items():
         X = r.model_input(bundle, row)
-        preds[k] = float(bundle["model"].predict(X)[0])
+        # + correccion del sesgo reciente medido al entrenar (ver
+        # nba_props_train.recent_bias); modelos viejos no la traen.
+        preds[k] = float(bundle["model"].predict(X)[0]) + float(bundle.get("bias", 0.0) or 0.0)
     return preds
 
 
@@ -351,13 +353,16 @@ def predict_slate(bundles, season=None, game_date=None, window=WINDOW, min_minut
 
 # Props que se consideran para picks (los de linea chica - robos, bloqueos,
 # perdidas - dependen de 1 jugada y son demasiado volatiles para "seguros").
-PICK_PROPS = ["points", "rebounds", "assists", "threes", "pra", "pr", "pa", "ra"]
+# P+R y R+A tambien quedan fuera: en el backtest fueron los menos confiables.
+PICK_PROPS = ["points", "rebounds", "assists", "threes", "pra", "pa"]
 # Linea minima para que el pick valga la pena (un "over 2.5 puntos" es casi
 # seguro pero ninguna casa lo paga).
 PICK_MIN_LINE = {"points": 9.5, "rebounds": 3.5, "assists": 2.5, "threes": 1.5,
                  "pra": 14.5, "pr": 11.5, "pa": 11.5, "ra": 5.5}
-PICK_MIN_PROB = 0.68        # probabilidad minima del modelo
-PICK_MIN_HIT = 0.70         # minimo de juegos recientes en que paso la linea
+# Umbrales elegidos con backtest en juegos no vistos (nov-2026): con 70% / 80%
+# y correccion de sesgo, 76% de acierto (82% esta temporada) vs 65% antes.
+PICK_MIN_PROB = 0.70        # probabilidad minima del modelo
+PICK_MIN_HIT = 0.80         # minimo de juegos recientes en que paso la linea
 PICK_MIN_GAMES = 5
 PICK_MIN_MINUTES = 22
 PICK_MAX_MIN_CV = 0.25      # minutos estables: desviacion <= 25% del promedio

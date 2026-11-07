@@ -27,6 +27,7 @@ from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LogisticRegression, LinearRegression
 from sklearn.metrics import (brier_score_loss, roc_auc_score, accuracy_score,
                               mean_absolute_error, mean_squared_error)
+from sklearn.base import clone
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -185,6 +186,10 @@ def train_regression(df, test_frac, model_out, label, naive_col, title):
         model_to_save, pred_to_save = NaiveBaselineRegressor(naive_col), pred_naive
     else:
         model_to_save, pred_to_save = linreg, pred_linreg
+    # Modelo final reentrenado con TODOS los datos (antes solo el 80% mas
+    # viejo: nunca aprendia de la temporada actual).
+    if not best_name.startswith("Baseline"):
+        model_to_save = clone(model_to_save).fit(df[FEATURES], df[label])
     joblib.dump({"model": model_to_save, "features": FEATURES, "model_name": best_name}, model_out)
     print(f"Modelo guardado en {model_out}")
 
@@ -233,6 +238,8 @@ def train_win_classifier(df, test_frac, model_out):
         model_to_save, prob_to_save = naive, prob_naive
     else:
         model_to_save, prob_to_save = logreg, prob_logreg
+    if model_to_save is logreg or model_to_save is hgb:
+        model_to_save = clone(model_to_save).fit(df[FEATURES], df[LABEL_WIN])
     joblib.dump({"model": model_to_save, "features": FEATURES, "model_name": best_name}, model_out)
     print(f"Modelo guardado en {model_out}")
 

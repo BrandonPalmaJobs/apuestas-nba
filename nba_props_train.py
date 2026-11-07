@@ -30,6 +30,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.base import clone
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -198,11 +199,45 @@ def train_stat(df, test_frac, model_out, label, naive_col, title):
     sigma_curve = fit_sigma_curve(best_pred, y_test.values)
     results.append({"modelo": "over_under (" + best_name + ")", **ou})
 
-    joblib.dump({"model": model_to_save, "features": features, "model_name": best_name,
-                 "sigma_curve": sigma_curve}, model_out)
-    print(f"Modelo guardado en {model_out}")
     print_feature_importance(model_to_save, X_test, y_test, features, f"Importancia de variables ({title})")
+
+    # MODELO FINAL: el elegido se vuelve a entrenar con TODOS los datos. Antes
+    # se guardaba el entrenado solo con el 80% mas viejo, asi que nunca
+    # aprendia de los juegos mas recientes (toda la temporada actual).
+    bias = 0.0
+    if not best_name.startswith("Baseline"):
+        model_to_save = clone(model_to_save).fit(df[features], df[label])
+        bias = recent_bias(df, features, label, model_to_save)
+        print(f"Modelo final reentrenado con los {len(df)} juegos. Correccion de sesgo reciente: {bias:+.2f}")
+
+    joblib.dump({"model": model_to_save, "features": features, "model_name": best_name,
+                 "sigma_curve": sigma_curve, "bias": bias}, model_out)
+    print(f"Modelo guardado en {model_out}")
     return results
+
+
+BIAS_DAYS = 21
+BIAS_MIN_ROWS = 200
+
+
+def recent_bias(df, features, label, final_model):
+    """Cuanto se ha equivocado el modelo EN PROMEDIO en los ultimos 21 dias
+    (sesgo), medido honestamente: se entrena una copia SIN esos dias y se
+    compara contra lo que paso. Al arranque de temporada el modelo tendia a
+    sobreestimar (~1 punto): con props de solo overs eso tumba picks. La
+    prediccion final se corrige sumando este sesgo (backtest: picks de 65% a
+    75% de acierto esta temporada). Acotado para que un mes raro no lo mueva
+    demasiado."""
+    dates = pd.to_datetime(df["date"], utc=True)
+    start = dates.max() - pd.Timedelta(days=BIAS_DAYS)
+    recent = dates >= start
+    if recent.sum() < BIAS_MIN_ROWS or (~recent).sum() < BIAS_MIN_ROWS:
+        return 0.0
+    m = clone(final_model).fit(df.loc[~recent, features], df.loc[~recent, label])
+    resid = df.loc[recent, label].values - m.predict(df.loc[recent, features])
+    bias = float(np.mean(resid))
+    cap = max(0.5, 0.15 * float(df.loc[recent, label].mean()))
+    return float(np.clip(bias, -cap, cap))
 
 
 def log_training_history(n_rows, n_players, results_by_stat, history_path="training_history_props.csv"):
