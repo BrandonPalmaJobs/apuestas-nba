@@ -250,8 +250,10 @@ def over_under(bundle, pred, line, odds=-110):
         return None
     p_over = ptr.prob_over(pred, line, curve)
     p_need = american_to_prob(odds)
-    best = "OVER" if p_over >= 0.5 else "UNDER"
-    p_best = max(p_over, 1 - p_over)
+    # Props de jugador: SOLO overs (decision del usuario) - la ventaja se mide
+    # siempre del lado del over, aunque el under sea mas probable.
+    best = "OVER"
+    p_best = p_over
     return {"line": line, "p_over": p_over, "p_under": 1 - p_over, "pick": best,
             "p_pick": p_best, "p_needed": p_need, "edge": p_best - p_need}
 
@@ -380,7 +382,7 @@ def _pick_for_prop(pred, values, curve, min_line, avg=None):
     avg = avg if avg else sum(vals) / len(vals)
     best = None
     top = int(max(vals + [pred])) + 1
-    for side in ("OVER", "UNDER"):
+    for side in ("OVER",):  # props de jugador: solo overs
         side_best = None
         for base in range(0, top + 1):
             line = base + 0.5
@@ -551,7 +553,7 @@ def main():
         txt = f"{pc.LABELS[k]:<12} {pred:5.1f}  (promedio {avg:.1f})"
         if ou:
             veredicto = "VALOR" if ou["edge"] > 0 else "sin ventaja"
-            txt += (f"  | linea {line}: over {ou['p_over']:.0%} / under {ou['p_under']:.0%} -> "
+            txt += (f"  | over {line}: {ou['p_over']:.0%} -> "
                     f"{ou['pick']} ({ou['edge']:+.1%}, {veredicto})")
         print(txt)
 

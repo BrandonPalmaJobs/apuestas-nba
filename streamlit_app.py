@@ -369,7 +369,7 @@ def render_reporte_tab():
 def render_props_tab():
     st.header("🏀 Props de jugador")
     st.caption("Puntos, rebotes y asistencias de un jugador en su proximo juego real. Despues de predecir, "
-               "mueve la linea para ver como cambian las probabilidades de over/under.")
+               "mueve la linea para ver como cambia la probabilidad del over.")
 
     team_names = sorted(t["full_name"] for t in n.TEAMS)
     with st.form("form_props"):
@@ -523,7 +523,7 @@ def _render_props_result(res, run_id):
     if res.get("doubt_names"):
         st.caption("⚠️ En duda (no se cuentan como fuera; revisa antes del juego): " + ", ".join(res["doubt_names"]))
 
-    momio = st.number_input("Momio over/under (americano)", value=-110, step=5,
+    momio = st.number_input("Momio del over (americano)", value=-110, step=5,
                              key=f"props_momio_{run_id}",
                              help="El momio que te da tu casa. -110 es el mas comun.")
 
@@ -548,19 +548,15 @@ def _render_props_result(res, run_id):
                 continue
             ou = pp.over_under({"sigma_curve": p["sigma_curve"]}, pred, line, momio)
             st.progress(ou["p_over"], text=f"Over {line:.1f}: **{ou['p_over']:.0%}**")
-            st.progress(ou["p_under"], text=f"Under {line:.1f}: **{ou['p_under']:.0%}**")
             if ou["edge"] > 0:
-                st.success(f"{ou['pick']} {ou['p_pick']:.0%} vs {ou['p_needed']:.0%} que pide el momio "
+                st.success(f"Over con ventaja: {ou['p_over']:.0%} vs {ou['p_needed']:.0%} que pide el momio "
                            f"({ou['edge']:+.1%})")
             else:
-                st.caption(f"Sin ventaja: lo mejor es {ou['pick']} {ou['p_pick']:.0%}, "
-                           f"el momio pide {ou['p_needed']:.0%}")
+                st.caption(f"Sin ventaja en el over: el modelo le da {ou['p_over']:.0%}, "
+                           f"el momio pide {ou['p_needed']:.0%}. Prueba una linea mas baja.")
             if res.get("game"):
-                b1, b2 = st.columns(2)
-                for btn, side in ((b1, "OVER"), (b2, "UNDER")):
-                    if btn.button(f"Aposte {side.lower()}", key=f"bet_{stat}_{side}_{run_id}",
-                                  use_container_width=True):
-                        _register_bet(res, stat, p, line, side, momio, ou)
+                if st.button("Aposte over", key=f"bet_{stat}_OVER_{run_id}", use_container_width=True):
+                    _register_bet(res, stat, p, line, "OVER", momio, ou)
 
 
 # ---------------------------------------------------------------------------
@@ -628,8 +624,8 @@ def _render_recommended_picks(df, bundles, run):
     st.caption(
         f"Solo jugadores con {pp.PICK_MIN_MINUTES}+ minutos estables y sin reporte de lesion propio. Cada pick "
         f"pasa DOS pruebas: el modelo le da {pp.PICK_MIN_PROB:.0%}+ y la rompio en {pp.PICK_MIN_HIT:.0%}+ de "
-        f"sus juegos recientes. La linea es la MAS ALTA que cumple las dos: compara con la de tu casa - si la "
-        f"de tu casa es mas baja (over) o mas alta (under), mejor todavia.")
+        f"sus juegos recientes. Solo overs. La linea es la MAS ALTA que cumple las dos: compara con la de tu "
+        f"casa - si la de tu casa es mas baja, mejor todavia.")
     if picks.empty:
         st.info("Ningun jugador pasa las dos pruebas hoy. Es preferible no forzar picks.")
         return
@@ -693,8 +689,6 @@ def _render_slate_table(df, bundles, run):
             "Fuera en su equipo": row.get("companeros_fuera") or "",
             "Linea": float(line),
             "Over %": round(ou["p_over"] * 100) if ou else None,
-            "Under %": round(ou["p_under"] * 100) if ou else None,
-            "Mejor": ou["pick"] if ou else "",
             "Ventaja %": round(ou["edge"] * 100, 1) if ou else None,
             "Aposte": "",
         })
@@ -709,16 +703,15 @@ def _render_slate_table(df, bundles, run):
 
     edited = st.data_editor(
         tdf, key=f"slate_editor_{stat}_{run}_{len(lines)}", hide_index=True, use_container_width=True,
-        column_order=["Jugador", "Partido", "Min", "Prediccion", "Promedio", "Fuera en su equipo", "Linea", "Over %", "Under %",
-                      "Mejor", "Ventaja %", "Aposte"],
-        disabled=["Jugador", "Partido", "Min", "Prediccion", "Promedio", "Fuera en su equipo", "Over %", "Under %", "Mejor",
+        column_order=["Jugador", "Partido", "Min", "Prediccion", "Promedio", "Fuera en su equipo", "Linea", "Over %",
+                      "Ventaja %", "Aposte"],
+        disabled=["Jugador", "Partido", "Min", "Prediccion", "Promedio", "Fuera en su equipo", "Over %",
                   "Ventaja %"],
         column_config={
             "Linea": st.column_config.NumberColumn(step=0.5, format="%.1f", min_value=0.5),
             "Over %": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%d%%"),
-            "Under %": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%d%%"),
             "Ventaja %": st.column_config.NumberColumn(format="%+.1f"),
-            "Aposte": st.column_config.SelectboxColumn(options=["", "OVER", "UNDER"],
+            "Aposte": st.column_config.SelectboxColumn(options=["", "OVER"],
                                                        help="Marca lo que apostaste y registralo abajo"),
         },
     )
@@ -733,7 +726,7 @@ def _render_slate_table(df, bundles, run):
     if changed:
         st.rerun()
 
-    marcadas = edited[edited["Aposte"].isin(["OVER", "UNDER"])]
+    marcadas = edited[edited["Aposte"] == "OVER"]
     if len(marcadas) and st.button(f"Registrar {len(marcadas)} apuesta(s) marcada(s)", type="primary"):
         for _, e in marcadas.iterrows():
             src = view[view["player_id"] == e["player_id"]].iloc[0]
