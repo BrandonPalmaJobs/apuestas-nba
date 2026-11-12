@@ -857,6 +857,24 @@ def render_quarters_tab():
                 else:
                     st.caption(f"Sin ventaja: lo mas probable es {ou['pick']} {ou['p_pick']:.0%}, "
                                f"el momio pide {ou['p_needed']:.0%}")
+
+                # Lineas por equipo en el cuarto
+                for t, side in ((away, "away"), (home, "home")):
+                    tp = pred.get(f"{q}_{side}")
+                    if tp is None:
+                        continue
+                    st.markdown(f"**{t['abbreviation']}** en el {nq.LABELS[q]}: {tp:.1f} pts")
+                    tline = st.number_input(f"Linea {t['abbreviation']} {nq.LABELS[q]}",
+                                            value=float(np.floor(tp) + 0.5), step=0.5, min_value=5.5,
+                                            format="%.1f", key=f"q_tline_{q}_{side}_{g['event_id']}_{run}")
+                    tou = nq.over_under(b, tp, tline, momio, team=True)
+                    if not tou:
+                        continue
+                    st.progress(tou["p_over"], text=f"Over {tline:.1f}: **{tou['p_over']:.0%}**")
+                    st.progress(tou["p_under"], text=f"Under {tline:.1f}: **{tou['p_under']:.0%}**")
+                    if tou["edge"] > 0:
+                        st.success(f"{tou['pick']} {tou['p_pick']:.0%} vs {tou['p_needed']:.0%} "
+                                   f"({tou['edge']:+.1%})")
         st.divider()
 
 

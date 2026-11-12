@@ -349,7 +349,9 @@ def build_dataset(games=None):
         row = game_row(hf, af, g["date"], q_share)
         row.update({"event_id": g["event_id"], "date": g["date"], "home": g["home"], "away": g["away"],
                     "label_q1": g["home_rec"]["q1_for"] + g["away_rec"]["q1_for"],
-                    "label_q2": g["home_rec"]["q2_for"] + g["away_rec"]["q2_for"]})
+                    "label_q2": g["home_rec"]["q2_for"] + g["away_rec"]["q2_for"],
+                    "label_q1_home": g["home_rec"]["q1_for"], "label_q1_away": g["away_rec"]["q1_for"],
+                    "label_q2_home": g["home_rec"]["q2_for"], "label_q2_away": g["away_rec"]["q2_for"]})
         rows.append(row)
     return pd.DataFrame(rows), q_share
 
@@ -379,7 +381,10 @@ def train_quarter(df, q, share, test_frac=0.2):
     d = df.dropna(subset=[label, f"base_{q}_casa", f"base_{q}_matchup"]).sort_values("date").reset_index(drop=True)
     cut = int(len(d) * (1 - test_frac))
     train, test = d.iloc[:cut], d.iloc[cut:]
-    X_tr, y_tr, X_te, y_te = train[FEATURES], train[label], test[FEATURES], test[label]
+    # Solo variables con datos (las de ritmo estan vacias hasta que se baja la
+    # jugada por jugada; una columna vacia hace tronar al Gradient Boosting).
+    feats = [f for f in FEATURES if train[f].notna().any() and test[f].notna().any()]
+    X_tr, y_tr, X_te, y_te = train[feats], train[label], test[feats], test[label]
 
     candidates = {
         "Linea estilo casa (fraccion del total)": ColumnBaseline(f"base_{q}_casa"),
@@ -390,10 +395,15 @@ def train_quarter(df, q, share, test_frac=0.2):
         "Gradient Boosting": HistGradientBoostingRegressor(max_depth=3, learning_rate=0.05, max_iter=300,
                                                             random_state=0),
     }
+    if test[f"base_{q}_pace"].notna().sum() < 50:
+        candidates.pop("Ritmo del cuarto x puntos por posesion")  # aun sin jugada por jugada
     results, preds = [], {}
     for name, m in candidates.items():
-        m.fit(X_tr, y_tr)
-        p = m.predict(X_te)
+        if isinstance(m, ColumnBaseline):  # las lineas base leen sus propias columnas
+            p = m.predict(test)
+        else:
+            m.fit(X_tr, y_tr)
+            p = m.predict(X_te)
         preds[name] = p
         results.append({"modelo": name, "mae": round(mean_absolute_error(y_te, p), 3)})
     rdf = pd.DataFrame(results).sort_values("mae")
@@ -420,16 +430,37 @@ def train_quarter(df, q, share, test_frac=0.2):
           f"{ou['acierto_si_confianza_60']} en {ou['pct_jugadas_confianza_60']:.0%} de los juegos")
     sigma_curve = ptr.fit_sigma_curve(best_pred, y_te.values)
 
+    # Error de los puntos POR EQUIPO en el cuarto (para las lineas por equipo):
+    # se reparte la prediccion del total como en vivo (team_split) y se compara.
+    team_sigma_curve = None
+    if f"label_{q}_home" in test.columns:
+        hs, as_ = team_split(test, q, best_pred)
+        tp = np.concatenate([hs, as_])
+        ta = np.concatenate([test[f"label_{q}_home"].values, test[f"label_{q}_away"].values])
+        ok = ~np.isnan(tp)
+        if ok.sum() > 50:
+            team_sigma_curve = ptr.fit_sigma_curve(tp[ok], ta[ok])
+
     model = candidates[best]
     bias = 0.0
     if not isinstance(model, ColumnBaseline):
-        model = clone(model).fit(d[FEATURES], d[label])
-        bias = ptr.recent_bias(d, FEATURES, label, model) if len(d) > 400 else 0.0
+        model = clone(model).fit(d[feats], d[label])
+        bias = ptr.recent_bias(d, feats, label, model) if len(d) > 400 else 0.0
         print(f"Modelo final con los {len(d)} juegos; correccion de sesgo reciente {bias:+.2f}")
-    bundle = {"model": model, "features": FEATURES, "model_name": best, "sigma_curve": sigma_curve,
+    bundle = {"model": model, "features": feats, "model_name": best, "sigma_curve": sigma_curve,
+              "team_sigma_curve": team_sigma_curve,
               "bias": bias, "share": share, "trained_at": datetime.now().isoformat(timespec="seconds")}
     metrics = {"modelos": results, "over_under": ou, "n_train": len(train), "n_test": len(test)}
     return bundle, metrics
+
+
+def team_split(df, q, total_pred):
+    """Reparte la prediccion del total del cuarto entre local y visitante:
+    lo que cada uno anota en ese cuarto vs lo que permite el rival."""
+    h = (df[f"home_{q}_for"].values + df[f"away_{q}_against"].values) / 2
+    a = (df[f"away_{q}_for"].values + df[f"home_{q}_against"].values) / 2
+    tot = h + a
+    return total_pred * h / tot, total_pred * a / tot
 
 
 def train_all(out_dir=APP_DIR):
@@ -539,9 +570,8 @@ def predict_game(bundles, home, away, start_iso, season=None):
     out = {"row": row, "home_f": hf, "away_f": af,
            "home_out_names": home_out_names, "away_out_names": away_out_names}
     for q, b in bundles.items():
-        X = pd.DataFrame([row]).reindex(columns=b["features"] + ([b["model"].col]
-                                                                 if isinstance(b["model"], ColumnBaseline)
-                                                                 and b["model"].col not in b["features"] else []))
+        X = (pd.DataFrame([row]) if isinstance(b["model"], ColumnBaseline)
+             else pd.DataFrame([row]).reindex(columns=b["features"]))
         out[q] = float(b["model"].predict(X)[0]) + float(b.get("bias") or 0)
         out[f"{q}_casa"] = row.get(f"base_{q}_casa")
         # Reparto del total entre los dos equipos: lo que cada uno anota en
@@ -555,8 +585,13 @@ def predict_game(bundles, home, away, start_iso, season=None):
     return out
 
 
-def over_under(bundle, pred, line, odds=-110):
-    curve = bundle.get("sigma_curve")
+def over_under(bundle, pred, line, odds=-110, team=False):
+    """team=True: linea de puntos de UN equipo en el cuarto (usa su propia
+    curva de error; modelos viejos sin ella usan ~62% de la del total)."""
+    curve = bundle.get("team_sigma_curve") if team else bundle.get("sigma_curve")
+    if team and not curve and bundle.get("sigma_curve"):
+        c = bundle["sigma_curve"]
+        curve = {"centers": [x / 2 for x in c["centers"]], "sigmas": [x * 0.62 for x in c["sigmas"]]}
     if not curve or line is None:
         return None
     p_over = ptr.prob_over(pred, line, curve)
