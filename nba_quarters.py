@@ -57,11 +57,12 @@ QUARTERS = {"q1": 0, "q2": 1}
 LABELS = {"q1": "1er cuarto", "q2": "2do cuarto"}
 ET = ZoneInfo("America/New_York")
 
-SIDE_FEATS = ["q1_for", "q1_against", "q1_for_l5", "q1_against_l5",
+SIDE_FEATS = ["q1_poss", "q1_ppp_for", "q1_ppp_against", "q2_poss", "q2_ppp_for", "q2_ppp_against",
+              "q1_for", "q1_against", "q1_for_l5", "q1_against_l5",
               "q2_for", "q2_against", "q2_for_l5", "q2_against_l5",
               "pts_for", "pts_against", "pace", "off_rtg", "def_rtg", "efg_pct", "tov_pct",
               "days_rest", "b2b", "starters_out", "n_games"]
-GAME_FEATS = ["start_hour_et", "matinee", "base_q1_matchup", "base_q2_matchup",
+GAME_FEATS = ["start_hour_et", "matinee", "base_q1_matchup", "base_q2_matchup", "base_q1_pace", "base_q2_pace",
               "base_full_total", "base_q1_casa", "base_q2_casa"]
 FEATURES = [f"home_{f}" for f in SIDE_FEATS] + [f"away_{f}" for f in SIDE_FEATS] + GAME_FEATS
 
@@ -74,7 +75,7 @@ DEFAULT_SHARE = {"q1": 0.255, "q2": 0.255}
 # Historial por equipo
 # ---------------------------------------------------------------------------
 
-def _record(team_id, my_q, opp_q, my_stats, opp_stats, date, is_home, played_ids, started_ids):
+def _record(team_id, my_q, opp_q, my_stats, opp_stats, date, is_home, played_ids, started_ids, qposs=None):
     """Un juego de un equipo, en el formato que usan las variables."""
     adv = None
     if my_stats and opp_stats:
@@ -90,7 +91,25 @@ def _record(team_id, my_q, opp_q, my_stats, opp_stats, date, is_home, played_ids
         "pace": adv.get("pace"), "off_rtg": adv.get("off_rtg"), "def_rtg": adv.get("def_rtg"),
         "efg_pct": adv.get("efg_pct"), "tov_pct": adv.get("tov_pct"),
         "played": played_ids, "started": started_ids,
+        # Posesiones del cuarto (promedio de ambos equipos = ritmo del cuarto)
+        # y puntos por posesion propios / permitidos.
+        **_pace_fields(team_id, my_q, opp_q, qposs),
     }
+
+
+def _pace_fields(team_id, my_q, opp_q, qposs):
+    out = {}
+    if not qposs:
+        return {f"{q}_{k}": None for q in QUARTERS for k in ("poss", "ppp_for", "ppp_against")}
+    other = next((t for t in qposs if t != str(team_id)), None)
+    for q, i in QUARTERS.items():
+        mine = (qposs.get(str(team_id)) or {}).get(q)
+        theirs = (qposs.get(other) or {}).get(q) if other else None
+        poss = _avg([mine, theirs])
+        out[f"{q}_poss"] = poss
+        out[f"{q}_ppp_for"] = my_q[i] / poss if poss else None
+        out[f"{q}_ppp_against"] = opp_q[i] / poss if poss else None
+    return out
 
 
 def _roster_sets(roster):
@@ -125,11 +144,109 @@ def load_cached_games(cache=None):
         ap, ast = _roster_sets(cache.get(f"roster:{eid}:{away}"))
         games.append({
             "event_id": eid, "date": comp["date"], "home": str(home), "away": str(away),
-            "home_rec": _record(home, hq, aq, hs, as_, comp["date"], True, hp, hst),
-            "away_rec": _record(away, aq, hq, as_, hs, comp["date"], False, ap, ast),
+            "home_rec": _record(home, hq, aq, hs, as_, comp["date"], True, hp, hst, cache.get(f"qposs:{eid}")),
+            "away_rec": _record(away, aq, hq, as_, hs, comp["date"], False, ap, ast, cache.get(f"qposs:{eid}")),
         })
     games.sort(key=lambda g: g["date"])
     return games
+
+
+# ---------------------------------------------------------------------------
+# Ritmo por cuarto desde la jugada por jugada (ESPN summary)
+# ---------------------------------------------------------------------------
+
+def _play_flags(play):
+    text = ((play.get("type") or {}).get("text") or "").lower()
+    desc = (play.get("text") or "").lower()
+    return text, desc
+
+
+def quarter_possessions_from_plays(plays):
+    """Posesiones por equipo en el 1Q y 2Q, con la formula estandar:
+    tiros de campo intentados + 0.44 x tiros libres - rebotes ofensivos +
+    perdidas, contando solo las jugadas de cada cuarto. Regresa
+    {team_id: {"q1": x, "q2": y}} o {} si no se pudo."""
+    acc = {}
+    for play in plays or []:
+        period = (play.get("period") or {}).get("number")
+        if period not in (1, 2):
+            continue
+        team = str((play.get("team") or {}).get("id") or "")
+        if not team:
+            continue
+        q = f"q{period}"
+        a = acc.setdefault(team, {}).setdefault(q, {"fga": 0, "fta": 0, "oreb": 0, "tov": 0})
+        text, desc = _play_flags(play)
+        if "free throw" in text or "free throw" in desc:
+            a["fta"] += 1
+        elif play.get("shootingPlay"):
+            a["fga"] += 1
+        elif "offensive rebound" in text:
+            a["oreb"] += 1
+        elif "turnover" in text or "turnover" in desc or "traveling" in text or "bad pass" in text:
+            a["tov"] += 1
+    out = {}
+    for team, qs in acc.items():
+        out[team] = {q: round(v["fga"] + 0.44 * v["fta"] - v["oreb"] + v["tov"], 1) for q, v in qs.items()}
+    # Sanidad: un cuarto tiene ~20-32 posesiones por equipo
+    if not out or any(not (12 <= v <= 40) for qs in out.values() for v in qs.values()):
+        return {}
+    return out
+
+
+def get_quarter_possessions(event_id):
+    """Posesiones por cuarto de un juego: del cache, o se descarga una vez."""
+    cache = n._load_summary_cache()
+    key = f"qposs:{event_id}"
+    if key in cache:
+        return cache[key]
+    try:
+        data = n.get_json(f"{n.ESPN_BASE}/summary", params={"event": event_id})
+        res = quarter_possessions_from_plays(data.get("plays"))
+    except Exception:
+        return {}
+    cache[key] = res
+    n._cache_dirty = True
+    return res
+
+
+def collect_quarter_pace(budget_min=40, verbose=True):
+    """Descarga la jugada por jugada de los juegos que aun no la tengan y
+    guarda SOLO las posesiones por cuarto (cache 'qposs:<id>'; la jugada
+    completa pesa demasiado para guardarla). Con presupuesto de tiempo: lo
+    que falte se completa en las siguientes noches."""
+    import time
+    start = time.time()
+    cache = n._load_summary_cache()
+    games = [k[5:] for k, v in cache.items()
+             if k.startswith("comp:") and isinstance(v, dict) and v.get("completed")]
+    todo = [eid for eid in games if f"qposs:{eid}" not in cache]
+    todo.sort(reverse=True)  # primero los mas recientes (los que mas pesan al predecir)
+    done = fails = 0
+    for eid in todo:
+        if time.time() - start > budget_min * 60:
+            break
+        try:
+            data = n.get_json(f"{n.ESPN_BASE}/summary", params={"event": eid})
+            res = quarter_possessions_from_plays(data.get("plays"))
+        except Exception as e:
+            fails += 1
+            if verbose and fails <= 5:
+                print(f"  [salteado] jugada por jugada {eid}: {str(e)[:100]}", file=sys.stderr)
+            continue
+        cache[f"qposs:{eid}"] = res  # {} = sin datos utiles: no se vuelve a pedir
+        n._cache_dirty = True
+        done += 1
+        if done % 100 == 0:
+            n.flush_cache()
+            if verbose:
+                print(f"  ritmo por cuarto: {done} juegos nuevos ({time.time() - start:.0f}s)", file=sys.stderr)
+        time.sleep(0.3)
+    n.flush_cache()
+    have = sum(1 for eid in games if cache.get(f"qposs:{eid}"))
+    print(f"Ritmo por cuarto: {done} juegos nuevos, {have}/{len(games)} juegos con datos "
+          f"({len(todo) - done} pendientes)")
+    return have, len(games)
 
 
 # ---------------------------------------------------------------------------
@@ -155,8 +272,9 @@ def side_features(history, game_date, starters_out=None):
     short = history[-SHORT:]
     f = {"n_games": len(prior)}
     for k in ("q1_for", "q1_against", "q2_for", "q2_against", "pts_for", "pts_against",
-              "pace", "off_rtg", "def_rtg", "efg_pct", "tov_pct"):
-        f[k] = _avg([g[k] for g in prior])
+              "pace", "off_rtg", "def_rtg", "efg_pct", "tov_pct",
+              "q1_poss", "q1_ppp_for", "q1_ppp_against", "q2_poss", "q2_ppp_for", "q2_ppp_against"):
+        f[k] = _avg([g.get(k) for g in prior])
     for k in ("q1_for", "q1_against", "q2_for", "q2_against"):
         f[f"{k}_l5"] = _avg([g[k] for g in short])
     rest = _days_between(history[-1]["date"], game_date) if history else None
@@ -187,6 +305,16 @@ def game_row(home_f, away_f, start_iso, share):
         hf, ha = home_f.get(f"{q}_for"), home_f.get(f"{q}_against")
         af, aa = away_f.get(f"{q}_for"), away_f.get(f"{q}_against")
         row[f"base_{q}_matchup"] = (_avg([hf, aa]) + _avg([af, ha])) if None not in (hf, ha, af, aa) else None
+    # Proyeccion por ritmo: posesiones esperadas del cuarto x puntos por
+    # posesion (ofensiva propia vs defensa rival) de cada equipo.
+    for q in QUARTERS:
+        vals = [home_f.get(f"{q}_poss"), away_f.get(f"{q}_poss"), home_f.get(f"{q}_ppp_for"),
+                away_f.get(f"{q}_ppp_against"), away_f.get(f"{q}_ppp_for"), home_f.get(f"{q}_ppp_against")]
+        if None in vals:
+            row[f"base_{q}_pace"] = None
+        else:
+            poss = _avg(vals[:2])
+            row[f"base_{q}_pace"] = poss * (_avg(vals[2:4]) + _avg(vals[4:6]))
     hpf, hpa, apf, apa = (home_f.get("pts_for"), home_f.get("pts_against"),
                           away_f.get("pts_for"), away_f.get("pts_against"))
     full = (_avg([hpf, apa]) + _avg([apf, hpa])) if None not in (hpf, hpa, apf, apa) else None
@@ -240,7 +368,10 @@ class ColumnBaseline:
         return self
 
     def predict(self, X):
-        return X[self.col].values
+        v = X[self.col].astype(float)
+        if self.col.endswith("_pace"):  # juegos sin jugada por jugada -> promedio del cuarto
+            v = v.fillna(X[self.col.replace("_pace", "_matchup")].astype(float))
+        return v.values
 
 
 def train_quarter(df, q, share, test_frac=0.2):
@@ -253,6 +384,7 @@ def train_quarter(df, q, share, test_frac=0.2):
     candidates = {
         "Linea estilo casa (fraccion del total)": ColumnBaseline(f"base_{q}_casa"),
         "Promedio del cuarto (anotados/permitidos)": ColumnBaseline(f"base_{q}_matchup"),
+        "Ritmo del cuarto x puntos por posesion": ColumnBaseline(f"base_{q}_pace"),
         "Regresion lineal": Pipeline([("imp", SimpleImputer(strategy="median")), ("sc", StandardScaler()),
                                       ("reg", LinearRegression())]),
         "Gradient Boosting": HistGradientBoostingRegressor(max_depth=3, learning_rate=0.05, max_iter=300,
@@ -273,7 +405,7 @@ def train_quarter(df, q, share, test_frac=0.2):
     # es mas estable (en pruebas el boosting gano en un corte y perdio en otro).
     simple = "Promedio del cuarto (anotados/permitidos)"
     mae = dict(zip(rdf["modelo"], rdf["mae"]))
-    if best in ("Regresion lineal", "Gradient Boosting") and mae[best] > mae[simple] - 0.05:
+    if best not in (simple, "Linea estilo casa (fraccion del total)") and mae[best] > mae[simple] - 0.05:
         best = simple
     best_pred = preds[best]
     print(f"Mejor: {best}")
@@ -355,7 +487,8 @@ def live_history(team_espn_id, season=None):
             played, started = _roster_sets(n.espn_game_roster(eid, team_espn_id))
         except Exception:
             played, started = None, None
-        rec = _record(team_espn_id, my_q, opp_q, my_stats, opp_stats, g.get("date") or "", None, played, started)
+        rec = _record(team_espn_id, my_q, opp_q, my_stats, opp_stats, g.get("date") or "", None, played, started,
+                      get_quarter_possessions(eid))
         try:
             rec["names"] = {str(e["player_id"]): e["name"] for e in n.espn_game_roster(eid, team_espn_id)}
         except Exception:
@@ -430,11 +563,17 @@ def over_under(bundle, pred, line, odds=-110):
 def main():
     parser = argparse.ArgumentParser(description="Modelo de totales del 1er y 2do cuarto")
     parser.add_argument("--train", action="store_true", help="Entrena con los datos del cache")
+    parser.add_argument("--collect-pace", action="store_true",
+                         help="Descarga la jugada por jugada pendiente (ritmo por cuarto)")
+    parser.add_argument("--budget-min", type=float, default=40)
     args = parser.parse_args()
+    if args.collect_pace:
+        collect_quarter_pace(args.budget_min)
     if args.train:
         train_all()
-    else:
+    if not (args.train or args.collect_pace):
         parser.print_help()
+        return
 
 
 if __name__ == "__main__":

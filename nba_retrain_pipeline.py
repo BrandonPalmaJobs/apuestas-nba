@@ -137,7 +137,10 @@ def main():
             failed.append("recoleccion de props")
 
     # Totales del 1Q/2Q: usa el cache que ya se actualizo arriba, tarda segundos.
-    if not run(["nba_quarters.py", "--train"], "EXTRA: Reentrenando los totales del 1er y 2do cuarto"):
+    # Primero baja la jugada por jugada pendiente (ritmo por cuarto, maximo 40
+    # min por noche; lo que falte se completa en las siguientes).
+    if not run(["nba_quarters.py", "--collect-pace", "--budget-min", "40", "--train"],
+               "EXTRA: Ritmo por cuarto + reentrenando los totales del 1er y 2do cuarto"):
         failed.append("modelos de cuartos")
 
     print("\n" + "=" * 72)

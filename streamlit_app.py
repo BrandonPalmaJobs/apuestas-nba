@@ -837,7 +837,9 @@ def render_quarters_tab():
                 st.caption(
                     f"{home['abbreviation']} anota {hf.get(f'{q}_for', 0):.1f} / permite {hf.get(f'{q}_against', 0):.1f} · "
                     f"{away['abbreviation']} anota {af.get(f'{q}_for', 0):.1f} / permite {af.get(f'{q}_against', 0):.1f} "
-                    f"(ultimos {min(hf.get('n_games', 0), af.get('n_games', 0))} juegos)")
+                    f"(ultimos {min(hf.get('n_games', 0), af.get('n_games', 0))} juegos)"
+                    + (f" · ritmo del cuarto ~{nq._avg([hf.get(f'{q}_poss'), af.get(f'{q}_poss')]):.1f} posesiones"
+                       if hf.get(f"{q}_poss") and af.get(f"{q}_poss") else ""))
                 default = float(np.floor(casa) + 0.5) if casa else float(np.floor(p) + 0.5)
                 line = st.number_input(f"Linea {nq.LABELS[q]}", value=default, step=0.5, min_value=10.5,
                                         format="%.1f", key=f"q_line_{q}_{g['event_id']}_{run}")
