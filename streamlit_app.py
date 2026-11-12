@@ -801,7 +801,17 @@ def render_quarters_tab():
         st.info("No hay juegos ese dia.")
         return
     run = st.session_state.get("q_run", 0)
-    momio = st.number_input("Momio (americano)", value=-110, step=5, key=f"q_momio_{run}")
+    m1, m2 = st.columns([1, 2])
+    formato = m1.radio("Momio", ["Decimal", "Americano"], horizontal=True, key="q_odds_fmt",
+                       help="Playdoit y otras casas en Mexico usan decimal (ej. 1.68)")
+    if formato == "Decimal":
+        dec = m2.number_input("Momio decimal", value=1.91, step=0.01, min_value=1.01, format="%.2f",
+                              key=f"q_momio_dec_{run}")
+        # decimal -> americano (es lo que usan los calculos)
+        momio = (dec - 1) * 100 if dec >= 2 else -100 / (dec - 1)
+        m2.caption(f"Necesitas acertar mas de {1 / dec:.1%} para ganar dinero con este momio")
+    else:
+        momio = m2.number_input("Momio americano", value=-110, step=5, key=f"q_momio_{run}")
 
     for res in results:
         home, away, pred, g = res["home"], res["away"], res["pred"], res["game"]

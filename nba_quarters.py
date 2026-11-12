@@ -63,6 +63,7 @@ SIDE_FEATS = ["q1_poss", "q1_ppp_for", "q1_ppp_against", "q2_poss", "q2_ppp_for"
               "pts_for", "pts_against", "pace", "off_rtg", "def_rtg", "efg_pct", "tov_pct",
               "days_rest", "b2b", "starters_out", "n_games"]
 GAME_FEATS = ["start_hour_et", "matinee", "base_q1_matchup", "base_q2_matchup", "base_q1_pace", "base_q2_pace",
+              "base_q1_split", "base_q2_split",
               "base_full_total", "base_q1_casa", "base_q2_casa"]
 FEATURES = [f"home_{f}" for f in SIDE_FEATS] + [f"away_{f}" for f in SIDE_FEATS] + GAME_FEATS
 
@@ -264,7 +265,10 @@ def _days_between(d1, d2):
     return (b.astimezone(ET).date() - a.astimezone(ET).date()).days
 
 
-def side_features(history, game_date, starters_out=None):
+VENUE_MIN = 3
+
+
+def side_features(history, game_date, starters_out=None, venue=None):
     """Variables de UN equipo a partir de sus juegos previos (mas reciente al
     final). starters_out: si es None se calcula del roster del juego (solo
     entrenamiento); en vivo viene del reporte de lesionados."""
@@ -281,6 +285,11 @@ def side_features(history, game_date, starters_out=None):
     f["days_rest"] = min(rest, MAX_REST) if rest is not None else None
     f["b2b"] = int(rest == 1) if rest is not None else 0
     f["starters_out"] = starters_out
+    # Promedios SOLO como local (venue=True) o SOLO como visitante (False):
+    # ultimos 10 juegos en esa condicion.
+    same = [g for g in history if g.get("is_home") is venue][-WINDOW:] if venue is not None else []
+    for k in ("q1_for", "q1_against", "q2_for", "q2_against"):
+        f[f"{k}_venue"] = _avg([g[k] for g in same]) if len(same) >= VENUE_MIN else None
     return f
 
 
@@ -315,6 +324,11 @@ def game_row(home_f, away_f, start_iso, share):
         else:
             poss = _avg(vals[:2])
             row[f"base_{q}_pace"] = poss * (_avg(vals[2:4]) + _avg(vals[4:6]))
+    # Lo mismo pero con promedios como local (casa) y como visitante (visita)
+    for q in QUARTERS:
+        v = [home_f.get(f"{q}_for_venue"), away_f.get(f"{q}_against_venue"),
+             away_f.get(f"{q}_for_venue"), home_f.get(f"{q}_against_venue")]
+        row[f"base_{q}_split"] = (_avg(v[:2]) + _avg(v[2:])) if None not in v else None
     hpf, hpa, apf, apa = (home_f.get("pts_for"), home_f.get("pts_against"),
                           away_f.get("pts_for"), away_f.get("pts_against"))
     full = (_avg([hpf, apa]) + _avg([apf, hpa])) if None not in (hpf, hpa, apf, apa) else None
@@ -337,7 +351,8 @@ def build_dataset(games=None):
             for h, rec in ((hh, g["home_rec"]), (ah, g["away_rec"])):
                 regs = regular_starters(h)
                 outs.append(len(regs - rec["played"]) if rec["played"] is not None and regs else None)
-            pending.append((g, side_features(hh, g["date"], outs[0]), side_features(ah, g["date"], outs[1])))
+            pending.append((g, side_features(hh, g["date"], outs[0], venue=True),
+                            side_features(ah, g["date"], outs[1], venue=False)))
         hh.append(g["home_rec"])
         ah.append(g["away_rec"])
     # Fraccion real del total que cae en cada cuarto (para la linea estilo casa)
@@ -376,6 +391,33 @@ class ColumnBaseline:
         return v.values
 
 
+class AdjustedBaseline:
+    """Promedio del cuarto mezclado 50/50 con el promedio como local/visita, y
+    ajustado por back-to-back con el efecto MEDIDO en los juegos de
+    entrenamiento (en 1Q: ~-1.2 si el local esta en B2B, ~-0.6 el visitante)."""
+
+    def __init__(self, q):
+        self.q = q
+        self.off_home = self.off_away = 0.0
+
+    def _base(self, X):
+        m = X[f"base_{self.q}_matchup"].astype(float)
+        sp = X[f"base_{self.q}_split"].astype(float).fillna(m) if f"base_{self.q}_split" in X else m
+        return 0.5 * m + 0.5 * sp
+
+    def fit(self, X, y):
+        resid = np.asarray(y, dtype=float) - self._base(X).values
+        for side in ("home", "away"):
+            b2b = X[f"{side}_b2b"].fillna(0).values == 1
+            off = float(resid[b2b].mean() - resid[~b2b].mean()) if b2b.sum() >= 30 else 0.0
+            setattr(self, f"off_{side}", float(np.clip(off, -3, 0.5)))
+        return self
+
+    def predict(self, X):
+        return (self._base(X) + self.off_home * X["home_b2b"].fillna(0).astype(float)
+                + self.off_away * X["away_b2b"].fillna(0).astype(float)).values
+
+
 def train_quarter(df, q, share, test_frac=0.2):
     label = f"label_{q}"
     d = df.dropna(subset=[label, f"base_{q}_casa", f"base_{q}_matchup"]).sort_values("date").reset_index(drop=True)
@@ -390,6 +432,7 @@ def train_quarter(df, q, share, test_frac=0.2):
         "Linea estilo casa (fraccion del total)": ColumnBaseline(f"base_{q}_casa"),
         "Promedio del cuarto (anotados/permitidos)": ColumnBaseline(f"base_{q}_matchup"),
         "Ritmo del cuarto x puntos por posesion": ColumnBaseline(f"base_{q}_pace"),
+        "Promedio ajustado (localia + back-to-back)": AdjustedBaseline(q),
         "Regresion lineal": Pipeline([("imp", SimpleImputer(strategy="median")), ("sc", StandardScaler()),
                                       ("reg", LinearRegression())]),
         "Gradient Boosting": HistGradientBoostingRegressor(max_depth=3, learning_rate=0.05, max_iter=300,
@@ -400,6 +443,9 @@ def train_quarter(df, q, share, test_frac=0.2):
     results, preds = [], {}
     for name, m in candidates.items():
         if isinstance(m, ColumnBaseline):  # las lineas base leen sus propias columnas
+            p = m.predict(test)
+        elif isinstance(m, AdjustedBaseline):
+            m.fit(train, y_tr)
             p = m.predict(test)
         else:
             m.fit(X_tr, y_tr)
@@ -415,8 +461,9 @@ def train_quarter(df, q, share, test_frac=0.2):
     # es mas estable (en pruebas el boosting gano en un corte y perdio en otro).
     simple = "Promedio del cuarto (anotados/permitidos)"
     mae = dict(zip(rdf["modelo"], rdf["mae"]))
-    if best not in (simple, "Linea estilo casa (fraccion del total)") and mae[best] > mae[simple] - 0.05:
-        best = simple
+    stable = min((x for x in mae if x not in ("Regresion lineal", "Gradient Boosting")), key=mae.get)
+    if best in ("Regresion lineal", "Gradient Boosting") and mae[best] > mae[stable] - 0.05:
+        best = stable
     best_pred = preds[best]
     print(f"Mejor: {best}")
 
@@ -443,7 +490,10 @@ def train_quarter(df, q, share, test_frac=0.2):
 
     model = candidates[best]
     bias = 0.0
-    if not isinstance(model, ColumnBaseline):
+    if isinstance(model, AdjustedBaseline):
+        model = AdjustedBaseline(q).fit(d, d[label])
+        print(f"Ajuste back-to-back medido: local {model.off_home:+.2f}, visitante {model.off_away:+.2f}")
+    elif not isinstance(model, ColumnBaseline):
         model = clone(model).fit(d[feats], d[label])
         bias = ptr.recent_bias(d, feats, label, model) if len(d) > 400 else 0.0
         print(f"Modelo final con los {len(d)} juegos; correccion de sesgo reciente {bias:+.2f}")
@@ -505,7 +555,8 @@ def live_history(team_espn_id, season=None):
     """Ultimos juegos del equipo con marcador por cuarto, en el mismo formato
     del entrenamiento (usa el cache; solo descarga lo que falte)."""
     hist = []
-    for g in n.espn_recent_games(team_espn_id, season=season, last_n=WINDOW):
+    # 2x la ventana: para tener tambien ~10 juegos como local y ~10 de visita
+    for g in n.espn_recent_games(team_espn_id, season=season, last_n=2 * WINDOW):
         eid, opp = g["id"], g["opponent_espn_id"]
         try:
             my_stats, my_q = n.team_game_boxscore(eid, team_espn_id)
@@ -518,7 +569,13 @@ def live_history(team_espn_id, season=None):
             played, started = _roster_sets(n.espn_game_roster(eid, team_espn_id))
         except Exception:
             played, started = None, None
-        rec = _record(team_espn_id, my_q, opp_q, my_stats, opp_stats, g.get("date") or "", None, played, started,
+        try:
+            comp = n.espn_competition_detail(eid)
+            is_home = next((c.get("home_away") == "home" for c in comp.get("competitors", [])
+                            if str(c.get("espn_id")) == str(team_espn_id)), None)
+        except Exception:
+            is_home = None
+        rec = _record(team_espn_id, my_q, opp_q, my_stats, opp_stats, g.get("date") or "", is_home, played, started,
                       get_quarter_possessions(eid))
         try:
             rec["names"] = {str(e["player_id"]): e["name"] for e in n.espn_game_roster(eid, team_espn_id)}
@@ -564,13 +621,13 @@ def predict_game(bundles, home, away, start_iso, season=None):
     away_out, away_out_names = starters_out_today(ah, away["espn_id"])
     share = next(iter(bundles.values())).get("share", DEFAULT_SHARE)
     start = start_iso if start_iso and "T" in start_iso else datetime.now(ET).isoformat()
-    hf = side_features(hh, start, home_out)
-    af = side_features(ah, start, away_out)
+    hf = side_features(hh, start, home_out, venue=True)
+    af = side_features(ah, start, away_out, venue=False)
     row = game_row(hf, af, start_iso, share)
     out = {"row": row, "home_f": hf, "away_f": af,
            "home_out_names": home_out_names, "away_out_names": away_out_names}
     for q, b in bundles.items():
-        X = (pd.DataFrame([row]) if isinstance(b["model"], ColumnBaseline)
+        X = (pd.DataFrame([row]) if isinstance(b["model"], (ColumnBaseline, AdjustedBaseline))
              else pd.DataFrame([row]).reindex(columns=b["features"]))
         out[q] = float(b["model"].predict(X)[0]) + float(b.get("bias") or 0)
         out[f"{q}_casa"] = row.get(f"base_{q}_casa")
