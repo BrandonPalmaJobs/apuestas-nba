@@ -1,0 +1,7 @@
+logged_at,market,event_id,game_date,subject_id,subject,team_espn_id,opp_espn_id,stat,line,odds,pred,p_over,model,actual,result,evaluated
+2026-11-12T21:06:51,q_total,401909977,2026-11-12,8@27,DET @ WAS,27,8,q1,59.5,-110,56.04,0.328,Promedio ajustado (localia + back-to-back),,,False
+2026-11-12T21:06:51,q_team,401909977,2026-11-12,8,DET,8,27,q1,25.5,-110,28.17,0.6844,Promedio ajustado (localia + back-to-back),,,False
+2026-11-12T21:06:51,q_team,401909977,2026-11-12,27,WAS,27,8,q1,30.5,-110,27.87,0.3145,Promedio ajustado (localia + back-to-back),,,False
+2026-11-12T21:06:51,q_total,401909977,2026-11-12,8@27,DET @ WAS,27,8,q2,54.5,-110,55.78,0.5588,Gradient Boosting,,,False
+2026-11-12T21:06:51,q_team,401909977,2026-11-12,8,DET,8,27,q2,30.0,-110,29.08,0.4107,Gradient Boosting,,,False
+2026-11-12T21:06:51,q_team,401909977,2026-11-12,27,WAS,27,8,q2,26.5,-110,26.69,0.5121,Gradient Boosting,,,False
