@@ -834,6 +834,9 @@ def render_quarters_tab():
                 casa = pred.get(f"{q}_casa")
                 st.metric(f"Total {nq.LABELS[q]}", f"{p:.1f}",
                           delta=f"{p - casa:+.1f} vs linea estilo casa" if casa else None)
+                if pred.get(f"{q}_home") is not None:
+                    st.markdown(f"**{away['abbreviation']} {pred[f'{q}_away']:.1f} – "
+                                f"{home['abbreviation']} {pred[f'{q}_home']:.1f}**")
                 st.caption(
                     f"{home['abbreviation']} anota {hf.get(f'{q}_for', 0):.1f} / permite {hf.get(f'{q}_against', 0):.1f} · "
                     f"{away['abbreviation']} anota {af.get(f'{q}_for', 0):.1f} / permite {af.get(f'{q}_against', 0):.1f} "

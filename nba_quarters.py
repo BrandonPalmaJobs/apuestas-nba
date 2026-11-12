@@ -544,6 +544,14 @@ def predict_game(bundles, home, away, start_iso, season=None):
                                                                  and b["model"].col not in b["features"] else []))
         out[q] = float(b["model"].predict(X)[0]) + float(b.get("bias") or 0)
         out[f"{q}_casa"] = row.get(f"base_{q}_casa")
+        # Reparto del total entre los dos equipos: lo que cada uno anota en
+        # ese cuarto contra lo que permite el rival (promedio de ambos lados),
+        # escalado para que sume la prediccion del total.
+        h_exp = _avg([hf.get(f"{q}_for"), af.get(f"{q}_against")])
+        a_exp = _avg([af.get(f"{q}_for"), hf.get(f"{q}_against")])
+        if h_exp and a_exp:
+            out[f"{q}_home"] = out[q] * h_exp / (h_exp + a_exp)
+            out[f"{q}_away"] = out[q] * a_exp / (h_exp + a_exp)
     return out
 
 
