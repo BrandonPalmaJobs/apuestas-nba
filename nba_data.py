@@ -747,7 +747,7 @@ def games_on_date(day=None):
         if not home or not away or not e.get("date") or _game_day_et(e["date"]) != day:
             return
         games[str(e["id"])] = {
-            "event_id": str(e["id"]), "date": day.isoformat(),
+            "event_id": str(e["id"]), "date": day.isoformat(), "start": e["date"],
             "home_espn_id": str((home.get("team") or {}).get("id") or home.get("id")),
             "away_espn_id": str((away.get("team") or {}).get("id") or away.get("id")),
         }

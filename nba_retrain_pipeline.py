@@ -105,6 +105,8 @@ def main():
                                    ("nba_props_train.py", "training_data_props.csv", "modelos de props")):
             if not run([script, "--data", data], f"Solo entrenar: {desc} (sin descargar)"):
                 failed.append(desc)
+        if not run(["nba_quarters.py", "--train"], "Solo entrenar: totales del 1Q y 2Q"):
+            failed.append("modelos de cuartos")
         if failed:
             print(f"FALLARON: {', '.join(failed)}")
             sys.exit(1)
@@ -133,6 +135,10 @@ def main():
         else:
             print("\nSe omite PASO 4/4: la recoleccion de props fallo.")
             failed.append("recoleccion de props")
+
+    # Totales del 1Q/2Q: usa el cache que ya se actualizo arriba, tarda segundos.
+    if not run(["nba_quarters.py", "--train"], "EXTRA: Reentrenando los totales del 1er y 2do cuarto"):
+        failed.append("modelos de cuartos")
 
     print("\n" + "=" * 72)
     print("Listo. Revisa training_history_nba.csv / training_history_props.csv para ver "

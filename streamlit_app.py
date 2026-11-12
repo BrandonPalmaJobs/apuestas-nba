@@ -20,7 +20,10 @@ import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+
+import numpy as np
 
 import joblib
 import pandas as pd
@@ -37,6 +40,7 @@ import nba_investors as inv
 import nba_props_predict as pp
 import nba_props_track as pt
 import props_config as pc
+import nba_quarters as nq
 import nba_report as r
 import nba_track as track
 
@@ -749,6 +753,109 @@ def _render_slate_table(df, bundles, run):
 
 
 # ---------------------------------------------------------------------------
+# Totales del 1er y 2do cuarto
+# ---------------------------------------------------------------------------
+
+def render_quarters_tab():
+    st.header("⏱️ Totales 1er y 2do cuarto")
+    st.warning("**En prueba:** en juegos pasados este modelo todavia NO muestra una ventaja comprobada contra "
+               "la linea de las casas (el cuarto es muy ruidoso, ~6.5 pts de error tipico). Usalo para analizar, "
+               "no como pick seguro. Registra tus apuestas para medir el acierto real.")
+
+    bundles = {q: load_bundle(os.path.join(APP_DIR, f"model_quarter_{q}.joblib")) for q in nq.QUARTERS}
+    bundles = {q: b for q, b in bundles.items() if b}
+    if not bundles:
+        st.info("Todavia no hay modelos de cuartos entrenados: se generan en el siguiente reentrenamiento.")
+        return
+
+    c1, c2 = st.columns([2, 1])
+    dia = c1.date_input("Dia de los juegos", value=date.today(), key="q_day")
+    c2.write("")
+    if c2.button("Cargar juegos", type="primary", use_container_width=True, key="q_load"):
+        games = n.games_on_date(dia)
+        results = []
+        bar = st.progress(0.0, text="Calculando...")
+        for i, g in enumerate(games):
+            home, away = n.team_by_espn_id(g["home_espn_id"]), n.team_by_espn_id(g["away_espn_id"])
+            if not home or not away:
+                continue
+            bar.progress(i / max(len(games), 1), text=f"{away['abbreviation']} @ {home['abbreviation']}")
+            try:
+                pred = nq.predict_game(bundles, home, away, g.get("start"))
+            except Exception as e:
+                pred = None
+                st.caption(f"{away['abbreviation']} @ {home['abbreviation']}: no se pudo calcular ({e})")
+            finally:
+                n.flush_cache()
+            if pred:
+                results.append({"game": g, "home": home, "away": away, "pred": pred})
+        bar.empty()
+        st.session_state["q_results"] = results
+        st.session_state["q_run"] = st.session_state.get("q_run", 0) + 1
+
+    results = st.session_state.get("q_results")
+    if results is None:
+        st.info("Toca 'Cargar juegos'.")
+        return
+    if not results:
+        st.info("No hay juegos ese dia.")
+        return
+    run = st.session_state.get("q_run", 0)
+    momio = st.number_input("Momio (americano)", value=-110, step=5, key=f"q_momio_{run}")
+
+    for res in results:
+        home, away, pred, g = res["home"], res["away"], res["pred"], res["game"]
+        start = g.get("start")
+        hora = ""
+        if start:
+            try:
+                hora = datetime.fromisoformat(start.replace("Z", "+00:00")).astimezone(
+                    ZoneInfo("America/Mexico_City")).strftime("%H:%M")
+            except Exception:
+                hora = ""
+        st.subheader(f"{away['abbreviation']} @ {home['abbreviation']}" + (f" · {hora} (CDMX)" if hora else ""))
+        hf, af, row = pred["home_f"], pred["away_f"], pred["row"]
+
+        alertas = []
+        for t, f, outs in ((home, hf, pred.get("home_out_names")), (away, af, pred.get("away_out_names"))):
+            if f.get("b2b"):
+                alertas.append(f"😴 {t['abbreviation']} en back-to-back")
+            if outs:
+                alertas.append(f"🚑 {t['abbreviation']} sin titular(es): {', '.join(outs)}")
+        if row.get("matinee"):
+            alertas.append("🌞 Juego de tarde (historicamente tiende al under en el 1Q)")
+        if alertas:
+            st.caption(" · ".join(alertas))
+
+        cols = st.columns(len(bundles))
+        for col, (q, b) in zip(cols, bundles.items()):
+            with col:
+                p = pred[q]
+                casa = pred.get(f"{q}_casa")
+                st.metric(f"Total {nq.LABELS[q]}", f"{p:.1f}",
+                          delta=f"{p - casa:+.1f} vs linea estilo casa" if casa else None)
+                st.caption(
+                    f"{home['abbreviation']} anota {hf.get(f'{q}_for', 0):.1f} / permite {hf.get(f'{q}_against', 0):.1f} · "
+                    f"{away['abbreviation']} anota {af.get(f'{q}_for', 0):.1f} / permite {af.get(f'{q}_against', 0):.1f} "
+                    f"(ultimos {min(hf.get('n_games', 0), af.get('n_games', 0))} juegos)")
+                default = float(np.floor(casa) + 0.5) if casa else float(np.floor(p) + 0.5)
+                line = st.number_input(f"Linea {nq.LABELS[q]}", value=default, step=0.5, min_value=10.5,
+                                        format="%.1f", key=f"q_line_{q}_{g['event_id']}_{run}")
+                ou = nq.over_under(b, p, line, momio)
+                if not ou:
+                    continue
+                st.progress(ou["p_over"], text=f"Over {line:.1f}: **{ou['p_over']:.0%}**")
+                st.progress(ou["p_under"], text=f"Under {line:.1f}: **{ou['p_under']:.0%}**")
+                if ou["edge"] > 0:
+                    st.success(f"{ou['pick']} {ou['p_pick']:.0%} vs {ou['p_needed']:.0%} que pide el momio "
+                               f"({ou['edge']:+.1%})")
+                else:
+                    st.caption(f"Sin ventaja: lo mas probable es {ou['pick']} {ou['p_pick']:.0%}, "
+                               f"el momio pide {ou['p_needed']:.0%}")
+        st.divider()
+
+
+# ---------------------------------------------------------------------------
 # Evaluar predicciones (reemplaza evaluar_predicciones.bat)
 # ---------------------------------------------------------------------------
 
@@ -1325,6 +1432,7 @@ def main():
     section = st.sidebar.radio("Seccion", [
         "📋 Reporte del juego",
         "📅 Props de hoy (todos)",
+        "⏱️ Totales 1Q / 2Q",
         "🏀 Props de jugador",
         "📈 Evaluar predicciones",
         "🔁 Reentrenar modelos",
@@ -1334,6 +1442,8 @@ def main():
 
     if section == "📋 Reporte del juego":
         render_reporte_tab()
+    elif section == "⏱️ Totales 1Q / 2Q":
+        render_quarters_tab()
     elif section == "📅 Props de hoy (todos)":
         render_slate_tab()
     elif section == "🏀 Props de jugador":
