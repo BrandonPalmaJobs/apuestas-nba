@@ -198,8 +198,26 @@ def opp_allowed_asof(opp_id, opp_series, before_date, window, starters_index, gr
     return allowed_per36(entries, group)
 
 
+def opp_absent_for_game(opp_series, opp_players, event_id, before_date, window):
+    """Jugadores de rotacion del RIVAL que no jugaron ese juego (para la
+    produccion que deja libre la defensa rival)."""
+    if not opp_series or not opp_players:
+        return []
+    idx = next((k for k, x in enumerate(opp_series) if x["event_id"] == event_id), None)
+    if idx is None:
+        return []
+    start = opp_series[max(0, idx - window)]["date"]
+    out = []
+    for tid, tinfo in opp_players.items():
+        if str(tid) not in opp_series[idx].get("dnp_ids", set()):
+            continue
+        tg = [x for x in tinfo["games"] if start <= x["date"] < before_date]
+        out.append(absent_info(tg))
+    return out
+
+
 def build_player_rows(team, season, all_team_series, player_games, starters_index, window, min_prior,
-                      verbose=True):
+                      verbose=True, all_player_games=None):
     team_series = all_team_series[str(team["espn_id"])]
     event_to_idx = {g["event_id"]: i for i, g in enumerate(team_series)}
 
@@ -251,6 +269,14 @@ def build_player_rows(team, season, all_team_series, player_games, starters_inde
                 tg = [x for x in tinfo["games"] if window_start <= x["date"] < pg["date"]]
                 absent.append(absent_info(tg))
             vacated = vacated_features(absent, group)
+            # Lo mismo del lado RIVAL: si falta su defensor de la misma
+            # posicion (o mucha produccion), el jugador suele sacar mas.
+            opp_absent = opp_absent_for_game(opp_series, (all_player_games or {}).get(str(opp_id)),
+                                             pg["event_id"], pg["date"], window)
+            vacated.update({f"opp_{k}": v for k, v in vacated_features(opp_absent, group).items()})
+            vacated.update({f"fat_{k}": v for k, v in td.r.fatigue_features(
+                team_series[max(0, i_team - 8):i_team], pg["date"],
+                team["espn_id"] if g_team.get("is_home") else opp_id).items()})
             last3 = prior[-3:]
             proj_margin = td.r.matchup_margin(team_feats, opp_feats)
             allowed = opp_allowed_asof(opp_id, opp_series, pg["date"], window, starters_index, group) or {}
@@ -317,7 +343,8 @@ def collect_props_dataset(season, team_names=None, window=10, min_prior=5, max_g
     all_rows = []
     for team in teams:
         all_rows.extend(build_player_rows(team, season, all_team_series, player_games_by_team[str(team["espn_id"])],
-                                          starters_index, window, min_prior, verbose=verbose))
+                                          starters_index, window, min_prior, verbose=verbose,
+                                          all_player_games=player_games_by_team))
     return pd.DataFrame(all_rows)
 
 

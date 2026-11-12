@@ -27,6 +27,8 @@ Notas:
 
 import argparse
 import sys
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import nba_data as n
 
@@ -381,6 +383,9 @@ def team_side_report(team, opponent, season, last_n, lesionado_override=None, as
         "lineup_probable": lineup_probable,
         "days_rest": days_rest, "is_b2b": is_b2b, "injury_impact": injury_impact,
         "missing_regulars": missing_regulars, "season_feats": season_feats,
+        # Para la fatiga fina (fatigue_features): juegos previos con su ciudad
+        # y si hubo tiempo extra, y la fecha del juego a predecir.
+        "fatigue_prior": _fatigue_prior(per_game), "game_date": as_of_date,
     }
 
 
@@ -388,6 +393,70 @@ def team_side_report(team, opponent, season, last_n, lesionado_override=None, as
 # que el modelo de equipo le de prioridad a la temporada actual cuando la
 # ventana todavia trae juegos de la pasada (arranque de temporada).
 SEASON_KEYS = ["off_rtg", "def_rtg", "net_rtg", "pace"]
+
+
+# Zona horaria (horas respecto a UTC, horario estandar) de la arena de cada
+# equipo, por espn_id - para medir viajes / cambios de zona horaria.
+TEAM_TZ = {1: -5, 2: -5, 17: -5, 30: -5, 4: -6, 5: -5, 6: -6, 7: -7, 8: -5, 9: -8, 10: -6, 11: -5,
+           12: -8, 13: -8, 29: -6, 14: -5, 15: -6, 16: -6, 3: -6, 18: -5, 25: -6, 19: -5, 20: -5,
+           21: -7, 22: -8, 23: -8, 24: -6, 28: -5, 26: -7, 27: -5}
+
+
+def _to_date(iso):
+    return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone(
+        ZoneInfo("America/New_York")).date()
+
+
+def _fatigue_prior(per_game):
+    out = []
+    for e, _, quarters in per_game:
+        venue = None
+        try:
+            comp = n.espn_competition_detail(e["id"])
+            venue = next((c.get("espn_id") for c in comp.get("competitors", [])
+                          if c.get("home_away") == "home"), None)
+        except Exception:
+            pass
+        out.append({"date": e.get("date"), "n_quarters": len(quarters) if quarters else 4,
+                    "venue_id": int(venue) if venue else None})
+    return out
+
+
+def rep_fatigue(rep, venue_team_id=None):
+    """Fatiga fina en vivo a partir de un team_side_report."""
+    gd = rep.get("game_date") or datetime.now().astimezone().isoformat()
+    if gd and "T" not in str(gd):
+        gd = f"{gd}T23:00:00+00:00"
+    return fatigue_features((rep.get("fatigue_prior") or [])[-8:], gd, venue_team_id)
+
+
+def fatigue_features(prior, game_date, venue_team_id=None):
+    """Fatiga mas fina que el back-to-back. prior: juegos previos del equipo
+    (mas reciente al final) como dicts con "date", y opcional "n_quarters"
+    (>4 = hubo tiempo extra) y "venue_id" (espn_id del equipo local = ciudad
+    donde se jugo). Misma funcion al entrenar y al predecir.
+      - three_in_four: este es su 3er juego (o mas) en 4 noches
+      - games_last_7: juegos en los 7 dias previos
+      - ot_prev: su juego anterior se fue a tiempo extra
+      - tz_shift: horas de diferencia entre la ciudad del juego anterior y
+        la de este (viaje / cambio de zona horaria)"""
+    out = {"three_in_four": 0, "games_last_7": 0, "ot_prev": 0, "tz_shift": None}
+    if not prior or not game_date:
+        return out
+    try:
+        d0 = _to_date(game_date)
+        days = [(d0 - _to_date(g["date"])).days for g in prior if g.get("date")]
+    except Exception:
+        return out
+    out["three_in_four"] = int(sum(1 for x in days if 1 <= x <= 3) >= 2)
+    out["games_last_7"] = sum(1 for x in days if 1 <= x <= 7)
+    last = prior[-1]
+    out["ot_prev"] = int((last.get("n_quarters") or 4) > 4)
+    if venue_team_id is not None and last.get("venue_id") is not None:
+        a, b = TEAM_TZ.get(int(last["venue_id"])), TEAM_TZ.get(int(venue_team_id))
+        if a is not None and b is not None:
+            out["tz_shift"] = abs(a - b)
+    return out
 
 
 def team_season_features(prior_games, cur_season):
@@ -406,8 +475,11 @@ def ml_extra_features(rep_home, rep_away):
     """Variables del modelo de equipo que no salen de 'advanced': prioridad a
     esta temporada. Se usan igual en nba_predict.py y streamlit_app.py."""
     row = {}
+    venue = (rep_home.get("team") or {}).get("espn_id")
     for side, rep in (("home", rep_home), ("away", rep_away)):
         for k, v in (rep.get("season_feats") or {}).items():
+            row[f"{side}_{k}"] = v
+        for k, v in rep_fatigue(rep, venue).items():
             row[f"{side}_{k}"] = v
     # Proyeccion de la formula simple - la misma de
     # nba_train_data._baseline_projection. Cuando la formula le gana al modelo

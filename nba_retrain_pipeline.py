@@ -59,6 +59,9 @@ def main():
     parser = argparse.ArgumentParser(description="Reentrena los modelos de NBA con los datos mas recientes")
     parser.add_argument("--season", type=int, default=None,
                          help="Anio en que TERMINA la temporada. Default: temporada actual")
+    parser.add_argument("--prev-seasons-team", type=int, default=2,
+                         help="Temporadas ANTERIORES para los modelos de equipo y cuartos (default 2 = 3 "
+                              "temporadas). Mas historia = mas ejemplos de situaciones raras.")
     parser.add_argument("--prev-seasons", type=int, default=1,
                          help="Cuantas temporadas ANTERIORES se suman a la actual (default 1). Asi el modelo "
                               "entrena desde el dia 1 de la temporada nueva: los primeros juegos usan como "
@@ -112,7 +115,10 @@ def main():
             sys.exit(1)
         return
 
-    ok = run(["nba_train_data.py", *season_args, "--out", "training_data_nba.csv"],
+    team_seasons = list(range(season - args.prev_seasons_team, season + 1))
+    team_args = ["--season", str(season), "--seasons", ",".join(map(str, team_seasons)),
+                 "--window", str(args.window), "--min-prior", str(args.min_prior)]
+    ok = run(["nba_train_data.py", *team_args, "--out", "training_data_nba.csv"],
              "PASO 1/4: Recolectando dataset historico de equipos (liga completa)")
     if not ok:
         print("\nSe detiene el reentrenamiento: la recoleccion de equipos fallo.")

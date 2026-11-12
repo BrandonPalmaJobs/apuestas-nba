@@ -61,7 +61,8 @@ SIDE_FEATS = ["q1_poss", "q1_ppp_for", "q1_ppp_against", "q2_poss", "q2_ppp_for"
               "q1_for", "q1_against", "q1_for_l5", "q1_against_l5",
               "q2_for", "q2_against", "q2_for_l5", "q2_against_l5",
               "pts_for", "pts_against", "pace", "off_rtg", "def_rtg", "efg_pct", "tov_pct",
-              "days_rest", "b2b", "starters_out", "n_games"]
+              "days_rest", "b2b", "starters_out", "n_games",
+              "three_in_four", "games_last_7", "ot_prev", "tz_shift"]
 GAME_FEATS = ["start_hour_et", "matinee", "base_q1_matchup", "base_q2_matchup", "base_q1_pace", "base_q2_pace",
               "base_q1_split", "base_q2_split",
               "base_full_total", "base_q1_casa", "base_q2_casa"]
@@ -76,7 +77,8 @@ DEFAULT_SHARE = {"q1": 0.255, "q2": 0.255}
 # Historial por equipo
 # ---------------------------------------------------------------------------
 
-def _record(team_id, my_q, opp_q, my_stats, opp_stats, date, is_home, played_ids, started_ids, qposs=None):
+def _record(team_id, my_q, opp_q, my_stats, opp_stats, date, is_home, played_ids, started_ids, qposs=None,
+            venue_id=None):
     """Un juego de un equipo, en el formato que usan las variables."""
     adv = None
     if my_stats and opp_stats:
@@ -92,6 +94,7 @@ def _record(team_id, my_q, opp_q, my_stats, opp_stats, date, is_home, played_ids
         "pace": adv.get("pace"), "off_rtg": adv.get("off_rtg"), "def_rtg": adv.get("def_rtg"),
         "efg_pct": adv.get("efg_pct"), "tov_pct": adv.get("tov_pct"),
         "played": played_ids, "started": started_ids,
+        "n_quarters": len(my_q), "venue_id": int(venue_id) if venue_id else None,
         # Posesiones del cuarto (promedio de ambos equipos = ritmo del cuarto)
         # y puntos por posesion propios / permitidos.
         **_pace_fields(team_id, my_q, opp_q, qposs),
@@ -145,8 +148,10 @@ def load_cached_games(cache=None):
         ap, ast = _roster_sets(cache.get(f"roster:{eid}:{away}"))
         games.append({
             "event_id": eid, "date": comp["date"], "home": str(home), "away": str(away),
-            "home_rec": _record(home, hq, aq, hs, as_, comp["date"], True, hp, hst, cache.get(f"qposs:{eid}")),
-            "away_rec": _record(away, aq, hq, as_, hs, comp["date"], False, ap, ast, cache.get(f"qposs:{eid}")),
+            "home_rec": _record(home, hq, aq, hs, as_, comp["date"], True, hp, hst, cache.get(f"qposs:{eid}"),
+                                venue_id=home),
+            "away_rec": _record(away, aq, hq, as_, hs, comp["date"], False, ap, ast, cache.get(f"qposs:{eid}"),
+                                venue_id=home),
         })
     games.sort(key=lambda g: g["date"])
     return games
@@ -268,7 +273,7 @@ def _days_between(d1, d2):
 VENUE_MIN = 3
 
 
-def side_features(history, game_date, starters_out=None, venue=None):
+def side_features(history, game_date, starters_out=None, venue=None, game_venue_id=None):
     """Variables de UN equipo a partir de sus juegos previos (mas reciente al
     final). starters_out: si es None se calcula del roster del juego (solo
     entrenamiento); en vivo viene del reporte de lesionados."""
@@ -285,6 +290,7 @@ def side_features(history, game_date, starters_out=None, venue=None):
     f["days_rest"] = min(rest, MAX_REST) if rest is not None else None
     f["b2b"] = int(rest == 1) if rest is not None else 0
     f["starters_out"] = starters_out
+    f.update(r.fatigue_features(history[-8:], game_date, game_venue_id))
     # Promedios SOLO como local (venue=True) o SOLO como visitante (False):
     # ultimos 10 juegos en esa condicion.
     same = [g for g in history if g.get("is_home") is venue][-WINDOW:] if venue is not None else []
@@ -351,8 +357,8 @@ def build_dataset(games=None):
             for h, rec in ((hh, g["home_rec"]), (ah, g["away_rec"])):
                 regs = regular_starters(h)
                 outs.append(len(regs - rec["played"]) if rec["played"] is not None and regs else None)
-            pending.append((g, side_features(hh, g["date"], outs[0], venue=True),
-                            side_features(ah, g["date"], outs[1], venue=False)))
+            pending.append((g, side_features(hh, g["date"], outs[0], venue=True, game_venue_id=g["home"]),
+                            side_features(ah, g["date"], outs[1], venue=False, game_venue_id=g["home"])))
         hh.append(g["home_rec"])
         ah.append(g["away_rec"])
     # Fraccion real del total que cae en cada cuarto (para la linea estilo casa)
@@ -470,12 +476,14 @@ def train_quarter(df, q, share, test_frac=0.2):
     # Over/under contra la linea estilo casa (lo que hacen las casas), en la
     # segunda mitad de la prueba, con la curva de error de la primera mitad.
     line_ref = np.floor(test[f"base_{q}_casa"].values) + 0.5
-    ou = ptr.evaluate_over_under(best_pred[: len(test) // 2], y_te.values[: len(test) // 2],
-                                 best_pred[len(test) // 2:], y_te.values[len(test) // 2:],
-                                 line_ref[len(test) // 2:])
+    h = len(test) // 2
+    ou = ptr.evaluate_over_under(best_pred[:h], y_te.values[:h], best_pred[h:], y_te.values[h:],
+                                 line_ref[h:], line_fit=line_ref[:h])
     print(f"Over/under vs linea estilo casa: acierto {ou['acierto_over_under']:.1%}; con confianza >=60%: "
           f"{ou['acierto_si_confianza_60']} en {ou['pct_jugadas_confianza_60']:.0%} de los juegos")
     sigma_curve = ptr.fit_sigma_curve(best_pred, y_te.values)
+    p_all = [ptr.prob_over(pr, ln, sigma_curve, raw=True) for pr, ln in zip(best_pred, line_ref)]
+    sigma_curve["calib"] = ptr.fit_calibration(p_all, y_te.values > ptr.over_threshold(line_ref))
 
     # Error de los puntos POR EQUIPO en el cuarto (para las lineas por equipo):
     # se reparte la prediccion del total como en vivo (team_split) y se compara.
@@ -576,7 +584,8 @@ def live_history(team_espn_id, season=None):
         except Exception:
             is_home = None
         rec = _record(team_espn_id, my_q, opp_q, my_stats, opp_stats, g.get("date") or "", is_home, played, started,
-                      get_quarter_possessions(eid))
+                      get_quarter_possessions(eid),
+                      venue_id=team_espn_id if is_home else (opp if is_home is False else None))
         try:
             rec["names"] = {str(e["player_id"]): e["name"] for e in n.espn_game_roster(eid, team_espn_id)}
         except Exception:
@@ -589,7 +598,7 @@ def live_history(team_espn_id, season=None):
 OUT_WORDS = ("out", "doubtful", "susp")
 
 
-def starters_out_today(history, team_espn_id):
+def starters_out_today(history, team_espn_id, manual_out=()):
     """(cuantos, nombres) de titulares habituales reportados Out/Doubtful hoy."""
     regs = regular_starters(history)
     names = {}
@@ -604,27 +613,31 @@ def starters_out_today(history, team_espn_id):
         nm = (names.get(pid) or "").lower()
         if not nm:
             continue
+        if nm in manual_out:  # baja confirmada a mano
+            out.append(names[pid])
+            continue
         for inj in injuries:
             if inj["name"].lower() == nm and any(w in inj["status"].lower() for w in OUT_WORDS):
                 out.append(names[pid])
     return len(out), out
 
 
-def predict_game(bundles, home, away, start_iso, season=None):
+def predict_game(bundles, home, away, start_iso, season=None, manual_out=()):
     """Prediccion del total del 1Q y 2Q de un juego. home/away: dicts de
     equipo (n.TEAMS). Incluye titulares habituales fuera hoy."""
     hh = live_history(home["espn_id"], season)
     ah = live_history(away["espn_id"], season)
     if len(hh) < 3 or len(ah) < 3:
         return None
-    home_out, home_out_names = starters_out_today(hh, home["espn_id"])
-    away_out, away_out_names = starters_out_today(ah, away["espn_id"])
+    home_out, home_out_names = starters_out_today(hh, home["espn_id"], manual_out)
+    away_out, away_out_names = starters_out_today(ah, away["espn_id"], manual_out)
     share = next(iter(bundles.values())).get("share", DEFAULT_SHARE)
     start = start_iso if start_iso and "T" in start_iso else datetime.now(ET).isoformat()
-    hf = side_features(hh, start, home_out, venue=True)
-    af = side_features(ah, start, away_out, venue=False)
+    hf = side_features(hh, start, home_out, venue=True, game_venue_id=home["espn_id"])
+    af = side_features(ah, start, away_out, venue=False, game_venue_id=home["espn_id"])
     row = game_row(hf, af, start_iso, share)
-    out = {"row": row, "home_f": hf, "away_f": af,
+    roster_names = sorted({nm for g in hh[-5:] + ah[-5:] for nm in (g.get("names") or {}).values()})
+    out = {"row": row, "home_f": hf, "away_f": af, "roster_names": roster_names,
            "home_out_names": home_out_names, "away_out_names": away_out_names}
     for q, b in bundles.items():
         X = (pd.DataFrame([row]) if isinstance(b["model"], (ColumnBaseline, AdjustedBaseline))

@@ -41,6 +41,9 @@ FEATURES = [
     # Prioridad a esta temporada (ver nba_report.team_season_features): cuantos
     # juegos de la ventana son de esta temporada y sus promedios solo con esos.
     "home_season_games", "away_season_games",
+    # Fatiga fina (ver nba_report.fatigue_features)
+    "home_three_in_four", "away_three_in_four", "home_games_last_7", "away_games_last_7",
+    "home_ot_prev", "away_ot_prev", "home_tz_shift", "away_tz_shift",
     "home_off_rtg_season", "home_def_rtg_season", "home_net_rtg_season", "home_pace_season",
     "away_off_rtg_season", "away_def_rtg_season", "away_net_rtg_season", "away_pace_season",
 ]
@@ -283,6 +286,10 @@ def main():
     args = parser.parse_args()
 
     df = pd.read_csv(args.data)
+    # Solo variables que existan y tengan datos: un dataset viejo (antes de
+    # agregar variables nuevas) o una columna vacia no deben tronar.
+    global FEATURES
+    FEATURES = [f for f in FEATURES if f in df.columns and df[f].notna().any()]
     print(f"Dataset: {len(df)} filas, {df[LABEL_WIN].mean():.1%} tasa de victoria local")
 
     train_df, test_df = time_split(df, args.test_frac)

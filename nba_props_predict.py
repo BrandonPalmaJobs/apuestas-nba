@@ -156,7 +156,7 @@ def _name_match(a, b):
     return a == b or (len(a) > 4 and (a in b or b in a))
 
 
-def absent_teammates(rep_team, team_players, player_id=None):
+def absent_teammates(rep_team, team_players, player_id=None, manual_out=()):
     """Version en vivo de la deteccion de ausentes del entrenamiento:
     companeros reportados Out/Doubtful HOY que estaban en la rotacion
     reciente. Regresa (lista para vacated_features, nombres fuera, nombres
@@ -168,6 +168,8 @@ def absent_teammates(rep_team, team_players, player_id=None):
             continue
         name = (info.get("name") or "").lower()
         status = next((st for nm, st in injuries if _name_match(nm, name)), None)
+        if name in manual_out:  # baja confirmada a mano (ultimo minuto)
+            status = "out (confirmado)"
         if status is None:
             continue
         if any(s in status for s in OUT_STATUSES):
@@ -184,7 +186,25 @@ def absent_teammates(rep_team, team_players, player_id=None):
 # Features y prediccion
 # ---------------------------------------------------------------------------
 
-def build_props_row(recent, rep_team, rep_opp, is_home=None, opp_allowed=None, season=None, absent=None):
+_MINUTES_MODEL = {}
+
+
+def apply_minutes_model(row, model_dir=APP_DIR):
+    """Etapa 1 del modelo de 2 etapas: minutos proyectados y produccion por
+    minuto x minutos (ver nba_props_train.train_minutes_model)."""
+    path = os.path.join(model_dir, ptr.MINUTES_MODEL_PATH)
+    if path not in _MINUTES_MODEL:
+        _MINUTES_MODEL[path] = joblib.load(path) if os.path.exists(path) else None
+    mm = _MINUTES_MODEL[path]
+    if not mm:
+        return row
+    df = pd.DataFrame([row])
+    pm = float(mm["model"].predict(df.reindex(columns=mm["features"]))[0])
+    return ptr.add_minutes_derived(df, [pm]).iloc[0].to_dict()
+
+
+def build_props_row(recent, rep_team, rep_opp, is_home=None, opp_allowed=None, season=None, absent=None,
+                    opp_absent=None):
     """Fila de features para los modelos de props - la MISMA para el CLI, la
     app y la tanda del dia, con las mismas columnas que arma
     nba_props_data.py al entrenar (las que un modelo viejo no use se ignoran)."""
@@ -208,7 +228,15 @@ def build_props_row(recent, rep_team, rep_opp, is_home=None, opp_allowed=None, s
     row.update(pdata.vacated_features(absent or [], pdata.main_group(recent)))
     for k in pc.ALLOWED_STATS:
         row[pc.allow_feature(k)] = (opp_allowed or {}).get(k)
-    return row
+    # Rival: su rotacion fuera hoy (su defensor de la misma posicion pesa mas)
+    row.update({f"opp_{k}": v for k, v in
+                pdata.vacated_features(opp_absent or [], pdata.main_group(recent)).items()})
+    # Fatiga fina del equipo del jugador
+    venue = None
+    if is_home is not None:
+        venue = ((rep_team.get("team") if is_home else rep_team.get("opponent")) or {}).get("espn_id")
+    row.update({f"fat_{k}": v for k, v in r.rep_fatigue(rep_team, venue).items()})
+    return apply_minutes_model(row)
 
 
 def load_bundles(model_dir=APP_DIR):
@@ -264,8 +292,12 @@ def over_under(bundle, pred, line, odds=-110):
 # Tanda del dia: todos los jugadores de todos los juegos
 # ---------------------------------------------------------------------------
 
+def _names_out(rep, players, manual_out=()):
+    return absent_teammates(rep, players, manual_out=manual_out)[1]
+
+
 def predict_slate(bundles, season=None, game_date=None, window=WINDOW, min_minutes=pdata.MIN_AVG_MINUTES,
-                  on_progress=None):
+                  on_progress=None, manual_out=()):
     """Predice TODOS los props de TODOS los jugadores (12+ min promedio) de
     los juegos de `game_date` (hoy por default). Excluye a quien ESPN
     reporta fuera (Out). Regresa un DataFrame: una fila por jugador con
@@ -287,7 +319,10 @@ def predict_slate(bundles, season=None, game_date=None, window=WINDOW, min_minut
         home, away = n.team_by_espn_id(game["home_espn_id"]), n.team_by_espn_id(game["away_espn_id"])
         if not home or not away:
             continue
-        for team, opponent, is_home in ((home, away, True), (away, home, False)):
+        # Primero ambos equipos (reportes y jugadores): cada lado necesita
+        # saber quien falta del OTRO (lesiones del rival).
+        sides = {}
+        for team, opponent in ((home, away), (away, home)):
             label = f"{team['abbreviation']} vs {opponent['abbreviation']}"
 
             def prog(i, tot, label=label, done=done):
@@ -295,25 +330,31 @@ def predict_slate(bundles, season=None, game_date=None, window=WINDOW, min_minut
                     on_progress(f"{label}: juego {i + 1}/{tot}", (done + i / max(tot, 1)) / total_teams)
 
             try:
-                rep_team = r.team_side_report(team, opponent, season, window, as_of_date=game["date"])
-                rep_opp = r.team_side_report(opponent, team, season, window, as_of_date=game["date"])
-                if not rep_team["advanced"] or not rep_opp["advanced"]:
-                    continue
-                players = team_players_recent_games(team["espn_id"], season, window=window, on_progress=prog)
+                rep_t = r.team_side_report(team, opponent, season, window, as_of_date=game["date"])
+                players_t = team_players_recent_games(team["espn_id"], season, window=window, on_progress=prog)
+                sides[str(team["espn_id"])] = (rep_t, players_t)
             except Exception as e:
                 print(f"  [salteado] {label}: {e}", file=sys.stderr)
-                continue
             finally:
                 done += 1
                 n.flush_cache()
 
-            _, team_out, _ = absent_teammates(rep_team, players)
+        for team, opponent, is_home in ((home, away, True), (away, home, False)):
+            if str(team["espn_id"]) not in sides or str(opponent["espn_id"]) not in sides:
+                continue
+            rep_team, players = sides[str(team["espn_id"])]
+            rep_opp, opp_players = sides[str(opponent["espn_id"])]
+            if not rep_team["advanced"] or not rep_opp["advanced"]:
+                continue
+            opp_absent, _, _ = absent_teammates(rep_opp, opp_players, manual_out=manual_out)
+            _, team_out, _ = absent_teammates(rep_team, players, manual_out=manual_out)
             team_out = {x.lower() for x in team_out}
             for pid, info in players.items():
                 recent = info["games"]
                 if len(recent) < 3 or info["name"].lower() in team_out:
                     continue
-                absent, out_names, doubt_names = absent_teammates(rep_team, players, player_id=pid)
+                absent, out_names, doubt_names = absent_teammates(rep_team, players, player_id=pid,
+                                                                  manual_out=manual_out)
                 avg_min = r._avg([g["minutes"] for g in recent])
                 if avg_min is None or avg_min < min_minutes:
                     continue
@@ -323,7 +364,7 @@ def predict_slate(bundles, season=None, game_date=None, window=WINDOW, min_minut
                 except Exception:
                     allowed = None
                 row = build_props_row(recent, rep_team, rep_opp, is_home=is_home, opp_allowed=allowed,
-                                      season=season, absent=absent)
+                                      season=season, absent=absent, opp_absent=opp_absent)
                 preds = predict_row(bundles, row)
                 rows.append({
                     "player_id": pid, "player": info["name"], "team": team["full_name"],
@@ -333,6 +374,8 @@ def predict_slate(bundles, season=None, game_date=None, window=WINDOW, min_minut
                     "min": round(avg_min, 1), "starter_rate": row["start_rate"],
                     "companeros_fuera": ", ".join(out_names), "en_duda": ", ".join(doubt_names),
                     "pts_libres_misma_pos": round(row["vacated_points_same_pos"], 1),
+                    "min_proyectados": round(row["proj_minutes"], 1) if row.get("proj_minutes") else None,
+                    "rival_fuera": ", ".join(_names_out(rep_opp, opp_players, manual_out)),
                     **{f"pred_{k}": v for k, v in preds.items()},
                     **{f"avg_{k}": row.get(pc.avg_feature(k)) for k in preds},
                     # Para los picks recomendados: juego por juego reciente
@@ -397,14 +440,19 @@ def _pick_for_prop(pred, values, curve, min_line, avg=None):
                 continue
             if side == "UNDER" and line > PICK_UNDER_MAX_FRAC * avg:
                 continue
-            p_over = ptr.prob_over(pred, line, curve)
-            p_model = p_over if side == "OVER" else 1 - p_over
+            # Seleccion con la probabilidad SIN calibrar (los umbrales se
+            # eligieron asi en el backtest: ~75% de acierto con 70%/80%); lo que
+            # se MUESTRA es la calibrada, que es mas realista.
+            p_raw = ptr.prob_over(pred, line, curve, raw=True)
+            p_sel = p_raw if side == "OVER" else 1 - p_raw
+            p_cal = ptr.prob_over(pred, line, curve)
+            p_model = p_cal if side == "OVER" else 1 - p_cal
             hits = sum(v > line for v in vals) if side == "OVER" else sum(v < line for v in vals)
-            if p_model < PICK_MIN_PROB or hits / len(vals) < PICK_MIN_HIT:
+            if p_sel < PICK_MIN_PROB or hits / len(vals) < PICK_MIN_HIT:
                 continue
             hit_adj = (hits + 1) / (len(vals) + 2)  # 8/10 pesa mas que 4/5
             cand = {"side": side, "line": line, "p_model": p_model, "hits": hits, "n": len(vals),
-                    "score": min(p_model, hit_adj)}
+                    "score": min(p_sel, hit_adj)}
             if side_best is None or (line > side_best["line"] if side == "OVER" else line < side_best["line"]):
                 side_best = cand
         if side_best and (best is None or side_best["score"] > best["score"]):

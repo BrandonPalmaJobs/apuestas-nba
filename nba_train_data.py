@@ -105,6 +105,9 @@ def build_team_season_series(team, season, max_games=None):
             "advanced": adv, "points": my_points, "opp_points": opp_points,
             "is_home": my_home, "days_rest": days_rest,
             "started_ids": started_ids, "dnp_ids": dnp_ids, "season": season,
+            # Para fatiga fina: tiempo extra y ciudad donde se jugo
+            "n_quarters": len(quarters),
+            "venue_id": int(team["espn_id"]) if my_home else (int(opp_espn_id) if opp_espn_id else None),
         })
         prev_date = game_date
     return series
@@ -149,12 +152,15 @@ def load_reusable_series(teams, seasons, max_games=None):
             saved = pickle.load(f)
     except Exception:
         return None
-    if saved.get("seasons") != list(seasons):
+    # Sirve si lo guardado CONTIENE las temporadas pedidas (equipo usa 3
+    # temporadas y props 2): se filtra a las que se piden.
+    if not set(seasons) <= set(saved.get("seasons") or []):
         return None
     series = saved.get("series", {})
     if not all(str(t["espn_id"]) in series for t in teams):
         return None
-    return series
+    want = set(seasons)
+    return {tid: [g for g in games if g.get("season") in want] for tid, games in series.items()}
 
 
 def save_reusable_series(series, seasons, max_games=None):
@@ -298,6 +304,8 @@ def build_rows_for_team(team, season, all_series, window, min_prior):
 
         cur_season = g.get("season", season)
         away_prior = [x for x in opp_series if x["date"] and x["date"] < g["date"]][-window:]
+        home_fat = r.fatigue_features(series[max(0, i - 8):i], g["date"], team["espn_id"])
+        away_fat = r.fatigue_features(away_prior[-8:], g["date"], team["espn_id"])
         home_sf = r.team_season_features(home_prior, cur_season)
         away_sf = r.team_season_features(away_prior, cur_season)
 
@@ -318,6 +326,10 @@ def build_rows_for_team(team, season, all_series, window, min_prior):
         for k in ADV_KEYS:
             row[f"home_{k}"] = home_feats[k]
             row[f"away_{k}"] = away_feats[k]
+        for k, v in home_fat.items():
+            row[f"home_{k}"] = v
+        for k, v in away_fat.items():
+            row[f"away_{k}"] = v
         for k, v in home_sf.items():
             row[f"home_{k}"] = v
         for k, v in away_sf.items():

@@ -50,7 +50,57 @@ FEATURES = (
     + [f"vacated_{k}" for k in pdata.VACATED_STATS]
     + [f"vacated_{k}_same_pos" for k in pdata.VACATED_STATS]
     + [pc.allow_feature(k) for k in pc.ALLOWED_STATS]
+    # Lado RIVAL: titulares/rotacion del rival que no juegan y su produccion
+    # (total y de la misma posicion del jugador = su defensor natural)
+    + ["opp_teammates_out"] + [f"opp_vacated_{k}" for k in pdata.VACATED_STATS]
+    + [f"opp_vacated_{k}_same_pos" for k in pdata.VACATED_STATS]
+    # Fatiga fina del equipo del jugador (nba_report.fatigue_features)
+    + ["fat_three_in_four", "fat_games_last_7", "fat_ot_prev", "fat_tz_shift"]
 )
+BASE_FEATURES = list(FEATURES)
+
+# MODELO DE MINUTOS (2 etapas): primero se predice cuantos minutos jugara y
+# luego su produccion por minuto x esos minutos. Los minutos son lo que mas
+# explica un prop (lesiones de companeros, back-to-back, riesgo de paliza).
+MINUTES_MODEL_PATH = "model_props_minutes_proj.joblib"
+MIN_DERIVED = ["proj_minutes"] + [f"proj_{k}_by_min" for k in pc.TARGETS]
+FEATURES = FEATURES + MIN_DERIVED
+
+
+def add_minutes_derived(df, proj_minutes):
+    """Agrega proj_minutes y, por cada prop, su produccion por minuto
+    reciente x los minutos proyectados. df puede ser de una sola fila."""
+    df = df.copy()
+    df["proj_minutes"] = proj_minutes
+    mins = df[pc.avg_feature("minutes")].astype(float).replace(0, np.nan)
+    for k in pc.TARGETS:
+        col = pc.avg_feature(k)
+        if col in df.columns:
+            df[f"proj_{k}_by_min"] = df[col].astype(float) / mins * df["proj_minutes"]
+    return df
+
+
+def train_minutes_model(df):
+    """Entrena el modelo de minutos y agrega las variables derivadas al
+    dataset. Para entrenar los props se usan predicciones FUERA DE MUESTRA
+    (validacion cruzada por bloques de tiempo): si no, los props aprenderian
+    de minutos "perfectos" que en vivo no existen."""
+    from sklearn.model_selection import KFold, cross_val_predict
+    if "label_minutes" not in df.columns:
+        return df
+    feats = [f for f in BASE_FEATURES if f in df.columns and df[f].notna().any()]
+    d = df.dropna(subset=["label_minutes"]).sort_values("date")
+    model = HistGradientBoostingRegressor(max_depth=4, learning_rate=0.05, max_iter=300, random_state=0)
+    oof = cross_val_predict(model, d[feats], d["label_minutes"], cv=KFold(5, shuffle=False))
+    base_mae = mean_absolute_error(d["label_minutes"], d[pc.avg_feature("minutes")].fillna(d["label_minutes"].mean()))
+    print(f"\n--- Modelo de minutos: error {mean_absolute_error(d['label_minutes'], oof):.2f} min "
+          f"(promedio simple: {base_mae:.2f} min) ---")
+    final = clone(model).fit(d[feats], d["label_minutes"])
+    joblib.dump({"model": final, "features": feats}, MINUTES_MODEL_PATH)
+    out = df.copy()
+    pm = pd.Series(np.nan, index=out.index)
+    pm.loc[d.index] = oof
+    return add_minutes_derived(out, pm.values)
 
 # (llave, columna de label, baseline = su promedio movil, titulo)
 STATS = [(k, f"label_{k}", pc.avg_feature(k), pc.LABELS[k]) for k in pc.TARGETS]
@@ -75,18 +125,52 @@ def fit_sigma_curve(preds, y, n_bins=5):
             "sigmas": [max(float(x), 0.5) for x in g["sigma"]]}
 
 
-def prob_over(pred, line, sigma_curve):
-    """P(stat > linea) segun la prediccion y la curva de error del modelo."""
+def prob_over(pred, line, sigma_curve, raw=False):
+    """P(stat > linea) segun la prediccion y la curva de error del modelo.
+    Si la curva trae calibracion ("calib"), se corrige: asi un 70% de la app
+    corresponde a ~70% de aciertos reales en juegos pasados."""
     sigma = float(np.interp(pred, sigma_curve["centers"], sigma_curve["sigmas"]))
-    return float(1 - norm.cdf((over_threshold(line) - pred) / sigma))
+    p = float(1 - norm.cdf((over_threshold(line) - pred) / sigma))
+    cal = sigma_curve.get("calib")
+    if cal and not raw:
+        p = float(np.interp(p, cal["x"], cal["y"]))
+    return min(max(p, 0.01), 0.99)
 
 
-def evaluate_over_under(pred_fit, y_fit, pred_eval, y_eval, line_eval):
+def fit_calibration(p_raw, actual):
+    """Calibracion isotonica: mapea la probabilidad 'cruda' a la frecuencia
+    real de over observada (monotona). None si hay muy pocos datos."""
+    from sklearn.isotonic import IsotonicRegression
+    p_raw, actual = np.asarray(p_raw, float), np.asarray(actual, float)
+    if len(p_raw) < 200:
+        return None
+    iso = IsotonicRegression(y_min=0.01, y_max=0.99, out_of_bounds="clip").fit(p_raw, actual)
+    xs = np.linspace(0.01, 0.99, 50)
+    return {"x": [float(x) for x in xs], "y": [float(y) for y in iso.predict(xs)]}
+
+
+def calibration_table(p, actual, bins=(0, .3, .4, .5, .6, .7, 1.01)):
+    """Que tan bien calibradas estan las probabilidades: por rango, % predicho
+    vs % real de over."""
+    p, actual = np.asarray(p), np.asarray(actual)
+    rows = []
+    for lo, hi in zip(bins[:-1], bins[1:]):
+        m = (p >= lo) & (p < hi)
+        if m.sum() >= 20:
+            rows.append({"rango": f"{lo:.0%}-{min(hi, 1):.0%}", "n": int(m.sum()),
+                         "predicho": round(float(p[m].mean()), 3), "real": round(float(actual[m].mean()), 3)})
+    return rows
+
+
+def evaluate_over_under(pred_fit, y_fit, pred_eval, y_eval, line_eval, line_fit=None):
     """Prueba honesta de las probabilidades: la curva de error se ajusta con
     la PRIMERA mitad del set de prueba y se evalua en la SEGUNDA. Como no hay
     lineas reales de casas guardadas, la linea de referencia es el promedio
     movil del jugador redondeado a .5 (parecido a como la ponen las casas)."""
     curve = fit_sigma_curve(pred_fit, y_fit)
+    if line_fit is not None:  # calibracion aprendida SOLO con la primera mitad
+        p_fit = [prob_over(pr, ln, curve, raw=True) for pr, ln in zip(pred_fit, line_fit)]
+        curve["calib"] = fit_calibration(p_fit, np.asarray(y_fit) > over_threshold(np.asarray(line_fit)))
     p = np.array([prob_over(pr, ln, curve) for pr, ln in zip(pred_eval, line_eval)])
     actual = (np.asarray(y_eval) > over_threshold(np.asarray(line_eval))).astype(int)
     confident = np.abs(p - 0.5) >= 0.1
@@ -97,6 +181,7 @@ def evaluate_over_under(pred_fit, y_fit, pred_eval, y_eval, line_eval):
         "acierto_si_confianza_60": round(float(np.mean((p[confident] > 0.5) == actual[confident])), 4)
             if confident.any() else None,
         "pct_jugadas_confianza_60": round(float(confident.mean()), 4),
+        "calibracion": calibration_table(p, actual),
     }
 
 
@@ -149,7 +234,7 @@ def print_feature_importance(model, X_test, y_test, features, title, n_repeats=3
 def train_stat(df, test_frac, model_out, label, naive_col, title):
     # Datasets viejos (antes de agregar las variables de contexto) siguen
     # funcionando: se usan solo las columnas que existan.
-    features = [f for f in FEATURES if f in df.columns]
+    features = [f for f in FEATURES if f in df.columns and df[f].notna().any()]
     train_df, test_df = time_split(df, test_frac)
     X_train, y_train = train_df[features], train_df[label]
     X_test, y_test = test_df[features], test_df[label]
@@ -192,11 +277,15 @@ def train_stat(df, test_frac, model_out, label, naive_col, title):
     half = len(test_df) // 2
     line_ref = np.floor(test_df[naive_col].values) + 0.5
     ou = evaluate_over_under(best_pred[:half], y_test.values[:half],
-                             best_pred[half:], y_test.values[half:], line_ref[half:])
+                             best_pred[half:], y_test.values[half:], line_ref[half:], line_fit=line_ref[:half])
     print(f"Over/under vs. linea de referencia (promedio movil a .5): acierto {ou['acierto_over_under']:.1%}, "
           f"Brier {ou['brier']} (moneda al aire: {ou['brier_moneda']}); "
           f"con confianza >=60%: {ou['acierto_si_confianza_60']} en {ou['pct_jugadas_confianza_60']:.0%} de los casos")
     sigma_curve = fit_sigma_curve(best_pred, y_test.values)
+    p_all = [prob_over(pr, ln, sigma_curve, raw=True) for pr, ln in zip(best_pred, line_ref)]
+    sigma_curve["calib"] = fit_calibration(p_all, y_test.values > over_threshold(line_ref))
+    print("Calibracion (prob. predicha vs % real de over): " + ", ".join(
+        f"{c['rango']}: {c['predicho']:.0%}->{c['real']:.0%}" for c in ou["calibracion"]))
     results.append({"modelo": "over_under (" + best_name + ")", **ou})
 
     print_feature_importance(model_to_save, X_test, y_test, features, f"Importancia de variables ({title})")
@@ -266,6 +355,7 @@ def main():
 
     df = pd.read_csv(args.data)
     print(f"Dataset: {len(df)} filas, {df['player_id'].nunique()} jugadores unicos")
+    df = train_minutes_model(df)
 
     results_by_stat = {}
     for stat_key, label, naive_col, title in STATS:

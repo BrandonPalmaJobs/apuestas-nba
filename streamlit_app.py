@@ -41,6 +41,7 @@ import nba_props_predict as pp
 import nba_props_track as pt
 import props_config as pc
 import nba_quarters as nq
+import lines_track as lt
 import nba_report as r
 import nba_track as track
 
@@ -455,11 +456,18 @@ def _compute_props(jugador, equipo_jugador, equipo_rival, season, window, log_th
             team_players = pp.team_players_recent_games(team["espn_id"], season, window=window)
         except Exception:
             team_players = {}
+        try:
+            opp_players = pp.team_players_recent_games(opponent["espn_id"], season, window=window)
+        except Exception:
+            opp_players = {}
         finally:
             n.flush_cache()
-    absent, out_names, doubt_names = pp.absent_teammates(rep_team, team_players, player_id=player_id)
+    manual_out = _manual_out()
+    absent, out_names, doubt_names = pp.absent_teammates(rep_team, team_players, player_id=player_id,
+                                                         manual_out=manual_out)
+    opp_absent, opp_out_names, _ = pp.absent_teammates(rep_opp, opp_players, manual_out=manual_out)
     row = pp.build_props_row(recent, rep_team, rep_opp, is_home=is_home, opp_allowed=opp_allowed, season=season,
-                             absent=absent)
+                             absent=absent, opp_absent=opp_absent)
 
     raw = pp.predict_row(bundles, row)
     preds = {k: {"pred": v, "model_name": bundles[k]["model_name"], "baseline": row[pc.avg_feature(k)],
@@ -486,7 +494,8 @@ def _compute_props(jugador, equipo_jugador, equipo_rival, season, window, log_th
         "recent": [{k: g[k] for k in ("points", "rebounds", "assists")} for g in recent],
         "days_rest": rep_team.get("days_rest"), "is_b2b": rep_team.get("is_b2b"),
         "preds": preds,
-        "out_names": out_names, "doubt_names": doubt_names,
+        "out_names": out_names, "doubt_names": doubt_names, "opp_out_names": opp_out_names,
+        "proj_minutes": row.get("proj_minutes"),
         "vacated": {k: row[k] for k in row if k.startswith("vacated_")},
         # Datos del juego real (para registrar apuestas); None si no hay
         # partido programado entre estos dos equipos.
@@ -524,6 +533,10 @@ def _render_props_result(res, run_id):
         st.info(f"🚑 Fuera hoy: {', '.join(res['out_names'])}. Dejan libres ~{v['vacated_points']:.0f} pts, "
                 f"{v['vacated_rebounds']:.0f} reb, {v['vacated_assists']:.0f} ast y {v['vacated_minutes']:.0f} min "
                 f"(de su misma posicion: {v['vacated_points_same_pos']:.0f} pts). Ya esta en la prediccion.")
+    if res.get("opp_out_names"):
+        st.caption(f"🛡️ Fuera en el rival: {', '.join(res['opp_out_names'])} (ya esta en la prediccion)")
+    if res.get("proj_minutes"):
+        st.caption(f"⏱️ Minutos proyectados hoy: {res['proj_minutes']:.1f}")
     if res.get("doubt_names"):
         st.caption("⚠️ En duda (no se cuentan como fuera; revisa antes del juego): " + ", ".join(res["doubt_names"]))
 
@@ -551,6 +564,8 @@ def _render_props_result(res, run_id):
                 st.caption("Reentrena los modelos para ver probabilidades.")
                 continue
             ou = pp.over_under({"sigma_curve": p["sigma_curve"]}, pred, line, momio)
+            st.session_state.setdefault("single_lines", {})[stat] = (line, pred, ou["p_over"] if ou else None,
+                                                                      p["model_name"])
             st.progress(ou["p_over"], text=f"Over {line:.1f}: **{ou['p_over']:.0%}**")
             if ou["edge"] > 0:
                 st.success(f"Over con ventaja: {ou['p_over']:.0%} vs {ou['p_needed']:.0%} que pide el momio "
@@ -561,6 +576,19 @@ def _render_props_result(res, run_id):
             if res.get("game"):
                 if st.button("Aposte over", key=f"bet_{stat}_OVER_{run_id}", use_container_width=True):
                     _register_bet(res, stat, p, line, "OVER", momio, ou)
+
+    if res.get("game"):
+        st.divider()
+        if st.button("💾 Guardar estas lineas de la casa (aunque no apuestes)", key=f"save_single_{run_id}",
+                     help="Cambia cada linea a la que da tu casa y guardalas: asi medimos al modelo contra "
+                          "lineas reales"):
+            g = res["game"]
+            rows_ = [{"market": "prop", "event_id": g["event_id"], "game_date": g["game_date"],
+                      "subject_id": g["player_id"], "subject": res["player_name"],
+                      "team_espn_id": g["team_espn_id"], "stat": k, "line": v[0], "odds": momio,
+                      "pred": round(v[1], 2), "p_over": round(v[2], 4) if v[2] is not None else None, "model": v[3]}
+                     for k, v in (st.session_state.get("single_lines") or {}).items()]
+            _save_house_lines(rows_, f"Lineas de la casa: {res['player_name']}")
 
 
 # ---------------------------------------------------------------------------
@@ -581,10 +609,12 @@ def render_slate_tab():
     c1, c2 = st.columns([2, 1])
     dia = c1.date_input("Dia de los juegos", value=date.today(), key="slate_day")
     c2.write("")
-    if c2.button("Cargar juegos", type="primary", use_container_width=True):
+    recalc = st.session_state.pop("slate_recalc", False)
+    if c2.button("Cargar juegos", type="primary", use_container_width=True) or recalc:
+        n._INJURY_CACHE.update(at=0, league=None)  # reporte de lesionados al momento
         bar = st.progress(0.0, text="Buscando juegos...")
         try:
-            df = pp.predict_slate(bundles, game_date=dia,
+            df = pp.predict_slate(bundles, game_date=dia, manual_out=_manual_out(),
                                   on_progress=lambda t, f: bar.progress(min(max(f, 0.0), 1.0), text=t))
         except Exception as e:
             bar.empty()
@@ -608,12 +638,42 @@ def render_slate_tab():
     run = st.session_state.get("slate_run", 0)
 
     st.caption(f"{len(df)} jugadores · {df['event_id'].nunique()} juegos")
+    if _manual_out_editor(sorted(df["player"].unique()), key="slate"):
+        st.session_state["slate_recalc"] = True
+        st.rerun()
 
     tab_picks, tab_todos = st.tabs(["⭐ Picks recomendados", "📋 Todos los jugadores"])
     with tab_picks:
         _render_recommended_picks(df, bundles, run)
     with tab_todos:
         _render_slate_table(df, bundles, run)
+
+
+def _save_house_lines(rows, msg):
+    """Guarda lineas reales de la casa y las sube a GitHub."""
+    k = lt.log_lines(rows, path=os.path.join(APP_DIR, lt.LINES_PATH))
+    ok, info = git_sync.commit_and_push([lt.LINES_PATH], msg, st.secrets, APP_DIR)
+    st.toast(f"{k} linea(s) guardada(s)" + ("" if ok else " (no se pudo subir a GitHub)"))
+
+
+def _manual_out():
+    return {x.lower() for x in st.session_state.get("manual_out") or ()}
+
+
+def _manual_out_editor(names, key):
+    """Bajas confirmadas de ultimo minuto (ej. al salir los quintetos 30 min
+    antes): se cuentan como FUERA en todos los calculos (props de sus
+    companeros y rivales, picks, totales 1Q/2Q). Regresa True si se pidio
+    recalcular."""
+    with st.expander("🚨 Bajas de ultimo minuto (marcar y recalcular)"):
+        st.caption("Si confirman que un jugador NO juega y el reporte de ESPN aun no lo dice, marcalo aqui "
+                   "y recalcula. Se aplica a todas las secciones mientras tengas la app abierta.")
+        current = [x for x in (st.session_state.get("manual_out") or []) if x in names]
+        sel = st.multiselect("Jugadores fuera (confirmado)", names, default=current, key=f"mo_sel_{key}")
+        if st.button("Recalcular con estas bajas", key=f"mo_btn_{key}"):
+            st.session_state["manual_out"] = sel
+            return True
+    return False
 
 
 def _render_recommended_picks(df, bundles, run):
@@ -627,9 +687,10 @@ def _render_recommended_picks(df, bundles, run):
     picks = pp.recommend_picks(df, bundles, per_team=per_team)
     st.caption(
         f"Solo jugadores con {pp.PICK_MIN_MINUTES}+ minutos estables y sin reporte de lesion propio. Cada pick "
-        f"pasa DOS pruebas: el modelo le da {pp.PICK_MIN_PROB:.0%}+ y la rompio en {pp.PICK_MIN_HIT:.0%}+ de "
-        f"sus juegos recientes. Solo overs. La linea es la MAS ALTA que cumple las dos: compara con la de tu "
-        f"casa - si la de tu casa es mas baja, mejor todavia.")
+        f"pasa DOS pruebas: el modelo lo ve muy por encima de la linea y la rompio en {pp.PICK_MIN_HIT:.0%}+ "
+        f"de sus juegos recientes. Solo overs. En juegos pasados, picks asi acertaron ~74%. La linea es la MAS "
+        f"ALTA que cumple las dos: si la de tu casa es mas baja, mejor todavia. 'Prob. realista' = probabilidad "
+        f"ya calibrada con resultados reales.")
     if picks.empty:
         st.info("Ningun jugador pasa las dos pruebas hoy. Es preferible no forzar picks.")
         return
@@ -646,7 +707,7 @@ def _render_recommended_picks(df, bundles, run):
                 col1, col2 = st.columns([4, 1])
                 col1.markdown(
                     f"⭐ **{p['player']}** — {lado} **{p['line']:.1f} {label.lower()}**  \n"
-                    f"Modelo {p['p_model']:.0%} · la rompio **{p['hits']} de {p['n']}** · "
+                    f"Prob. realista {p['p_model']:.0%} · la rompio **{p['hits']} de {p['n']}** · "
                     f"prediccion {p['pred']:.1f} (promedio {p['avg']:.1f}) · {p['min']:.0f} min"
                     + (f"  \n🚑 Fuera en su equipo: {p['companeros_fuera']}" if p["companeros_fuera"] else ""))
                 if col2.button("Aposte", key=f"pick_bet_{run}_{p['player_id']}_{p['prop']}",
@@ -730,6 +791,23 @@ def _render_slate_table(df, bundles, run):
     if changed:
         st.rerun()
 
+    if lines and st.button(f"💾 Guardar las {len(lines)} linea(s) de la casa que escribiste ({pc.LABELS[stat]})",
+                           key=f"save_lines_{stat}_{run}",
+                           help="Aunque no apuestes: sirve para medir al modelo contra tus lineas reales"):
+        rows_ = []
+        for pid, ln in lines.items():
+            m_ = view[view["player_id"] == pid]
+            if m_.empty:
+                continue
+            src = m_.iloc[0]
+            ou_ = pp.over_under({"sigma_curve": curve}, src[f"pred_{stat}"], ln, momio) if curve else None
+            rows_.append({"market": "prop", "event_id": src["event_id"], "game_date": src["game_date"],
+                          "subject_id": src["player_id"], "subject": src["player"],
+                          "team_espn_id": src["team_espn_id"], "stat": stat, "line": ln, "odds": momio,
+                          "pred": round(src[f"pred_{stat}"], 2), "p_over": round(ou_["p_over"], 4) if ou_ else None,
+                          "model": bundles[stat]["model_name"]})
+        _save_house_lines(rows_, f"Lineas de la casa: {len(rows_)} props")
+
     marcadas = edited[edited["Aposte"] == "OVER"]
     if len(marcadas) and st.button(f"Registrar {len(marcadas)} apuesta(s) marcada(s)", type="primary"):
         for _, e in marcadas.iterrows():
@@ -771,7 +849,9 @@ def render_quarters_tab():
     c1, c2 = st.columns([2, 1])
     dia = c1.date_input("Dia de los juegos", value=date.today(), key="q_day")
     c2.write("")
-    if c2.button("Cargar juegos", type="primary", use_container_width=True, key="q_load"):
+    q_recalc = st.session_state.pop("q_recalc", False)
+    if c2.button("Cargar juegos", type="primary", use_container_width=True, key="q_load") or q_recalc:
+        n._INJURY_CACHE.update(at=0, league=None)
         games = n.games_on_date(dia)
         results = []
         bar = st.progress(0.0, text="Calculando...")
@@ -781,7 +861,7 @@ def render_quarters_tab():
                 continue
             bar.progress(i / max(len(games), 1), text=f"{away['abbreviation']} @ {home['abbreviation']}")
             try:
-                pred = nq.predict_game(bundles, home, away, g.get("start"))
+                pred = nq.predict_game(bundles, home, away, g.get("start"), manual_out=_manual_out())
             except Exception as e:
                 pred = None
                 st.caption(f"{away['abbreviation']} @ {home['abbreviation']}: no se pudo calcular ({e})")
@@ -801,6 +881,10 @@ def render_quarters_tab():
         st.info("No hay juegos ese dia.")
         return
     run = st.session_state.get("q_run", 0)
+    all_names = sorted({nm for res in results for nm in res["pred"].get("roster_names", [])})
+    if _manual_out_editor(all_names, key="quarters"):
+        st.session_state["q_recalc"] = True
+        st.rerun()
     m1, m2 = st.columns([1, 2])
     formato = m1.radio("Momio", ["Decimal", "Americano"], horizontal=True, key="q_odds_fmt",
                        help="Playdoit y otras casas en Mexico usan decimal (ej. 1.68)")
@@ -857,6 +941,8 @@ def render_quarters_tab():
                 line = st.number_input(f"Linea {nq.LABELS[q]}", value=default, step=0.5, min_value=10.5,
                                         format="%.1f", key=f"q_line_{q}_{g['event_id']}_{run}")
                 ou = nq.over_under(b, p, line, momio)
+                st.session_state.setdefault("q_lines", {})[(g["event_id"], q, "total")] = (
+                    line, p, ou["p_over"] if ou else None, home["espn_id"], away["espn_id"])
                 if not ou:
                     continue
                 st.progress(ou["p_over"], text=f"Over {line:.1f}: **{ou['p_over']:.0%}**")
@@ -878,6 +964,9 @@ def render_quarters_tab():
                                             value=float(np.floor(tp) + 0.5), step=0.5, min_value=5.5,
                                             format="%.1f", key=f"q_tline_{q}_{side}_{g['event_id']}_{run}")
                     tou = nq.over_under(b, tp, tline, momio, team=True)
+                    st.session_state.setdefault("q_lines", {})[(g["event_id"], q, side)] = (
+                        tline, tp, tou["p_over"] if tou else None, t["espn_id"],
+                        (away if side == "home" else home)["espn_id"])
                     if not tou:
                         continue
                     st.progress(tou["p_over"], text=f"Over {tline:.1f}: **{tou['p_over']:.0%}**")
@@ -885,6 +974,21 @@ def render_quarters_tab():
                     if tou["edge"] > 0:
                         st.success(f"{tou['pick']} {tou['p_pick']:.0%} vs {tou['p_needed']:.0%} "
                                    f"({tou['edge']:+.1%})")
+        if st.button("💾 Guardar las lineas de la casa de este juego (aunque no apuestes)",
+                     key=f"q_save_{g['event_id']}_{run}"):
+            rows_ = []
+            for (eid, q, side), v in (st.session_state.get("q_lines") or {}).items():
+                if eid != g["event_id"]:
+                    continue
+                line_, pred_, pov, tid, oid = v
+                rows_.append({"market": "q_total" if side == "total" else "q_team", "event_id": eid,
+                              "game_date": g["date"], "subject_id": tid if side != "total" else f"{oid}@{tid}",
+                              "subject": (n.team_by_espn_id(tid) or {}).get("abbreviation", "") if side != "total"
+                              else f"{away['abbreviation']} @ {home['abbreviation']}",
+                              "team_espn_id": tid, "opp_espn_id": oid, "stat": q, "line": line_, "odds": momio,
+                              "pred": round(pred_, 2), "p_over": round(pov, 4) if pov is not None else None,
+                              "model": bundles[q]["model_name"]})
+            _save_house_lines(rows_, f"Lineas de la casa 1Q/2Q: {away['abbreviation']} @ {home['abbreviation']}")
         st.divider()
 
 
@@ -930,6 +1034,28 @@ def render_evaluar():
             st.secrets, APP_DIR,
         )
         (st.success if ok else st.warning)(msg)
+
+    st.divider()
+    st.header("📏 El modelo contra las lineas REALES de tu casa")
+    st.caption("Las lineas que guardaste con '💾 Guardar lineas' (props y 1Q/2Q), aunque no hayas apostado. "
+               "Es la prueba que importa: si el modelo le gana a las lineas de tu casa.")
+    lpath = os.path.join(APP_DIR, lt.LINES_PATH)
+    if st.button("Liquidar lineas de juegos terminados", key="settle_lines"):
+        with st.spinner("Revisando resultados..."):
+            ldf = lt.settle(lpath)
+        ok, msg = git_sync.commit_and_push([lt.LINES_PATH], f"Liquida lineas de la casa {date.today().isoformat()}",
+                                           st.secrets, APP_DIR)
+        (st.success if ok else st.warning)(msg)
+    if os.path.exists(lpath):
+        ldf = pd.read_csv(lpath, dtype=str)
+        summ = lt.summarize(ldf)
+        pend = (ldf["evaluated"].str.lower() != "true").sum()
+        st.caption(f"{len(ldf)} lineas guardadas · {pend} pendientes de liquidar")
+        if not summ.empty:
+            st.dataframe(summ, hide_index=True, use_container_width=True)
+            st.caption("Con menos de ~50 lineas por mercado, los porcentajes aun son mayormente suerte.")
+    else:
+        st.info("Todavia no hay lineas guardadas.")
 
     st.divider()
     st.header("💰 Apuestas de props registradas")
