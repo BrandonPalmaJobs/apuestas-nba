@@ -1,0 +1,29 @@
+{
+  "modelos": [
+    {
+      "modelo": "Linea estilo casa (fraccion del total)",
+      "mae": 7.374
+    },
+    {
+      "modelo": "Promedio del cuarto (anotados/permitidos)",
+      "mae": 7.338
+    },
+    {
+      "modelo": "Regresion lineal",
+      "mae": 7.41
+    },
+    {
+      "modelo": "Gradient Boosting",
+      "mae": 7.288
+    }
+  ],
+  "over_under": {
+    "brier": 0.2535,
+    "brier_moneda": 0.25,
+    "acierto_over_under": 0.5333,
+    "acierto_si_confianza_60": 0.5306,
+    "pct_jugadas_confianza_60": 0.3267
+  },
+  "n_train": 1197,
+  "n_test": 300
+}
