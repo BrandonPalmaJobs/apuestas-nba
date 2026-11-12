@@ -48,32 +48,67 @@ _summary_cache = None
 _cache_dirty = False
 
 
+# El cache se guarda en VARIOS archivos (cache/summaries/part_XX.json):
+# un solo archivo paso los 100 MB que GitHub permite y se rechazo el
+# guardado de todo un reentrenamiento. Cada llave va a un archivo fijo
+# segun su hash, asi cada archivo se queda chico (~1/16 del total).
+_SHARD_DIR = os.path.join(_CACHE_DIR, "summaries")
+N_SHARDS = 16
+
+
+def _shard_of(key):
+    import zlib
+    return zlib.crc32(key.encode("utf-8")) % N_SHARDS
+
+
+def _shard_path(i):
+    return os.path.join(_SHARD_DIR, f"part_{i:02d}.json")
+
+
 def _load_summary_cache():
-    global _summary_cache
+    global _summary_cache, _cache_dirty
     if _summary_cache is None:
+        cache = {}
+        for i in range(N_SHARDS):
+            p = _shard_path(i)
+            if os.path.exists(p):
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        cache.update(json.load(f))
+                except Exception:
+                    pass
+        # Migracion: el archivo unico viejo se lee una vez y se reparte
         if os.path.exists(_SUMMARY_CACHE_PATH):
             try:
                 with open(_SUMMARY_CACHE_PATH, "r", encoding="utf-8") as f:
-                    _summary_cache = json.load(f)
+                    old = json.load(f)
+                for k, v in old.items():
+                    cache.setdefault(k, v)
+                _cache_dirty = True
             except Exception:
-                _summary_cache = {}
-        else:
-            _summary_cache = {}
+                pass
+        _summary_cache = cache
     return _summary_cache
 
 
 def flush_cache():
-    """Guarda a disco los juegos nuevos que se agregaron al cache durante
-    esta corrida - se llama UNA vez al final (no en cada request) para no
-    reescribir el archivo completo decenas de veces."""
+    """Guarda a disco el cache (repartido en N_SHARDS archivos). Se llama al
+    final de cada etapa, no en cada request."""
     global _cache_dirty
     if not _cache_dirty or _summary_cache is None:
         return
-    os.makedirs(_CACHE_DIR, exist_ok=True)
-    tmp_path = _SUMMARY_CACHE_PATH + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(_summary_cache, f)
-    os.replace(tmp_path, _SUMMARY_CACHE_PATH)
+    os.makedirs(_SHARD_DIR, exist_ok=True)
+    shards = [{} for _ in range(N_SHARDS)]
+    for k, v in _summary_cache.items():
+        shards[_shard_of(k)][k] = v
+    for i, part in enumerate(shards):
+        tmp = _shard_path(i) + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(part, f, sort_keys=True, separators=(",", ":"))  # orden fijo = diffs chicos
+        os.replace(tmp, _shard_path(i))
+    # El archivo unico viejo ya quedo repartido: se borra
+    if os.path.exists(_SUMMARY_CACHE_PATH):
+        os.remove(_SUMMARY_CACHE_PATH)
     _cache_dirty = False
 
 

@@ -87,7 +87,10 @@ jobs:
           git add model_nba_*.joblib* model_props_*.joblib* model_quarter_*.joblib* \
                   training_data_nba.csv training_data_props.csv \
                   training_history_nba.csv training_history_props.csv training_history_quarters.csv \
-                  cache/game_summaries.json
+                  cache/summaries/
+          # El cache viejo de un solo archivo (paso 100 MB) ya se reparte en
+          # cache/summaries/: se quita del repo.
+          git rm -q --cached --ignore-unmatch cache/game_summaries.json
           git diff --cached --quiet || git commit -m "Reentrenamiento automatico (GitHub Actions) $(date -u +%Y-%m-%d)"
           # Si alguien mas subio un commit mientras esto corria (horas), un
           # push directo se rechaza (non-fast-forward). Rebase encima de lo

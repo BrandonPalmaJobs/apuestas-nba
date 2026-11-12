@@ -1152,7 +1152,8 @@ def _run_retrain_nba(skip_props):
         *[f for k in pc.TARGETS for f in (f"model_props_{k}.joblib", f"model_props_{k}.joblib.metrics.json")
           if os.path.exists(os.path.join(APP_DIR, f))],
         "training_data_props.csv", "training_history_props.csv",
-        "cache/game_summaries.json",
+        *[f"cache/summaries/part_{i:02d}.json" for i in range(n.N_SHARDS)
+          if os.path.exists(os.path.join(APP_DIR, "cache", "summaries", f"part_{i:02d}.json"))],
     ]
     ok, msg = git_sync.commit_and_push(
         files_to_save, f"Reentrenamiento automatico {date.today().isoformat()}", st.secrets, APP_DIR,

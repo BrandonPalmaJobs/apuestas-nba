@@ -128,8 +128,7 @@ def load_cached_games(cache=None):
     """Todos los juegos terminados con marcador por cuarto de ambos equipos
     en el cache, en orden cronologico."""
     if cache is None:
-        with open(CACHE_PATH) as f:
-            cache = json.load(f)
+        cache = n._load_summary_cache()
     games = []
     for key, comp in cache.items():
         if not key.startswith("comp:") or not isinstance(comp, dict) or not comp.get("completed"):
