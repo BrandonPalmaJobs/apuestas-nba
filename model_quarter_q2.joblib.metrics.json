@@ -9,20 +9,24 @@
       "mae": 7.338
     },
     {
+      "modelo": "Promedio ajustado (localia + back-to-back)",
+      "mae": 7.249
+    },
+    {
       "modelo": "Regresion lineal",
-      "mae": 7.41
+      "mae": 7.325
     },
     {
       "modelo": "Gradient Boosting",
-      "mae": 7.288
+      "mae": 7.116
     }
   ],
   "over_under": {
-    "brier": 0.2535,
+    "brier": 0.248,
     "brier_moneda": 0.25,
-    "acierto_over_under": 0.5333,
-    "acierto_si_confianza_60": 0.5306,
-    "pct_jugadas_confianza_60": 0.3267
+    "acierto_over_under": 0.5933,
+    "acierto_si_confianza_60": 0.6111,
+    "pct_jugadas_confianza_60": 0.36
   },
   "n_train": 1197,
   "n_test": 300
