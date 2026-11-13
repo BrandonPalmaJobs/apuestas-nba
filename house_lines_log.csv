@@ -23,9 +23,15 @@ logged_at,market,event_id,game_date,subject_id,subject,team_espn_id,opp_espn_id,
 2026-11-13T23:52:33,q_total,401909301,2026-11-13,26@10,UTA @ HOU,10,26,q2,55.5,-109.8901098901099,54.5,0.4368,Promedio ajustado (localia + back-to-back),,,False
 2026-11-13T23:52:33,q_team,401909301,2026-11-13,26,UTA,26,10,q2,24.5,-109.8901098901099,24.17,0.4787,Promedio ajustado (localia + back-to-back),,,False
 2026-11-13T23:52:33,q_team,401909301,2026-11-13,10,HOU,10,26,q2,30.5,-109.8901098901099,30.33,0.4893,Promedio ajustado (localia + back-to-back),,,False
-2026-11-13T23:52:59,q_total,401909302,2026-11-13,9@24,GSW @ SAS,24,9,q1,58.5,-109.8901098901099,58.04,0.2178,Linea estilo casa (fraccion del total),None,None,False
-2026-11-13T23:52:59,q_team,401909302,2026-11-13,9,GSW,9,24,q1,21.5,-109.8901098901099,27.55,0.8513,Linea estilo casa (fraccion del total),None,None,False
-2026-11-13T23:52:59,q_team,401909302,2026-11-13,24,SAS,24,9,q1,21.5,-109.8901098901099,30.49,0.9343,Linea estilo casa (fraccion del total),None,None,False
-2026-11-13T23:52:59,q_total,401909302,2026-11-13,9@24,GSW @ SAS,24,9,q2,57.5,-109.8901098901099,57.71,0.4423,Promedio ajustado (localia + back-to-back),None,None,False
-2026-11-13T23:52:59,q_team,401909302,2026-11-13,9,GSW,9,24,q2,29.5,-109.8901098901099,29.43,0.495,Promedio ajustado (localia + back-to-back),None,None,False
-2026-11-13T23:52:59,q_team,401909302,2026-11-13,24,SAS,24,9,q2,28.5,-109.8901098901099,28.29,0.4853,Promedio ajustado (localia + back-to-back),None,None,False
+2026-11-13T23:52:59,q_total,401909302,2026-11-13,9@24,GSW @ SAS,24,9,q1,58.5,-109.8901098901099,58.04,0.2178,Linea estilo casa (fraccion del total),,,False
+2026-11-13T23:52:59,q_team,401909302,2026-11-13,9,GSW,9,24,q1,21.5,-109.8901098901099,27.55,0.8513,Linea estilo casa (fraccion del total),,,False
+2026-11-13T23:52:59,q_team,401909302,2026-11-13,24,SAS,24,9,q1,21.5,-109.8901098901099,30.49,0.9343,Linea estilo casa (fraccion del total),,,False
+2026-11-13T23:52:59,q_total,401909302,2026-11-13,9@24,GSW @ SAS,24,9,q2,57.5,-109.8901098901099,57.71,0.4423,Promedio ajustado (localia + back-to-back),,,False
+2026-11-13T23:52:59,q_team,401909302,2026-11-13,9,GSW,9,24,q2,29.5,-109.8901098901099,29.43,0.495,Promedio ajustado (localia + back-to-back),,,False
+2026-11-13T23:52:59,q_team,401909302,2026-11-13,24,SAS,24,9,q2,28.5,-109.8901098901099,28.29,0.4853,Promedio ajustado (localia + back-to-back),,,False
+2026-11-13T23:53:18,q_total,401909303,2026-11-13,22@23,POR @ SAC,23,22,q1,58.5,-109.8901098901099,58.63,0.5119,Linea estilo casa (fraccion del total),None,None,False
+2026-11-13T23:53:18,q_team,401909303,2026-11-13,22,POR,22,23,q1,24.5,-109.8901098901099,29.37,0.7727,Linea estilo casa (fraccion del total),None,None,False
+2026-11-13T23:53:18,q_team,401909303,2026-11-13,23,SAC,23,22,q1,24.5,-109.8901098901099,29.26,0.7655,Linea estilo casa (fraccion del total),None,None,False
+2026-11-13T23:53:18,q_total,401909303,2026-11-13,22@23,POR @ SAC,23,22,q2,57.5,-109.8901098901099,63.19,0.8,Promedio ajustado (localia + back-to-back),None,None,False
+2026-11-13T23:53:18,q_team,401909303,2026-11-13,22,POR,22,23,q2,33.5,-109.8901098901099,33.77,0.5169,Promedio ajustado (localia + back-to-back),None,None,False
+2026-11-13T23:53:18,q_team,401909303,2026-11-13,23,SAC,23,22,q2,29.5,-109.8901098901099,29.42,0.4945,Promedio ajustado (localia + back-to-back),None,None,False
