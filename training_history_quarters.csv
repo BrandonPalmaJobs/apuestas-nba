@@ -3,3 +3,4 @@ timestamp,n_games,modelo_q1,mae_q1,mae_q1_casa,acierto_ou_q1,modelo_q2,mae_q2,ma
 2026-11-12T15:05:01,1497,Promedio del cuarto (anotados/permitidos),6.374,6.405,0.52,Gradient Boosting,7.288,7.374,0.5333
 2026-11-12T15:49:23,1497,Promedio ajustado (localia + back-to-back),6.329,6.405,0.5267,Gradient Boosting,7.116,7.374,0.5933
 2026-11-12T22:29:04,2554,Regresion lineal,6.469,6.476,0.5273,Promedio ajustado (localia + back-to-back),6.745,6.806,0.5859
+2026-11-13T17:17:00,2558,Linea estilo casa (fraccion del total),6.458,6.458,0.5195,Promedio ajustado (localia + back-to-back),6.715,6.78,0.5938

@@ -28,3 +28,4 @@ timestamp,n_rows,modelo_total,mae_total,mae_total_baseline,modelo_margin,mae_mar
 2026-11-12T15:04:34,1316,Baseline (formula puntos totales),15.2297,15.2297,Baseline (formula margen local (spread)),12.6482,12.6482,Baseline (formula -> logistica),0.1953,0.1953
 2026-11-12T15:49:00,1316,Baseline (formula puntos totales),15.2297,15.2297,Baseline (formula margen local (spread)),12.6482,12.6482,Baseline (formula -> logistica),0.1953,0.1953
 2026-11-12T21:51:48,2558,Baseline (formula puntos totales),15.1579,15.1579,Regresion lineal,11.9107,12.3144,Regresion logistica,0.1972,0.1974
+2026-11-13T17:15:08,2562,Baseline (formula puntos totales),15.2436,15.2436,Regresion lineal,11.9127,12.3295,Gradient Boosting,0.1925,0.197
