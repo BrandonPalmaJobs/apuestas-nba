@@ -1,62 +1,62 @@
 [
   {
     "modelo": "Baseline (promedio movil propio)",
-    "mae": 2.9122,
-    "rmse": 3.8069
+    "mae": 2.9079,
+    "rmse": 3.8051
   },
   {
     "modelo": "Regresion lineal",
-    "mae": 2.8208,
-    "rmse": 3.6725
+    "mae": 2.8164,
+    "rmse": 3.6706
   },
   {
     "modelo": "Gradient Boosting",
-    "mae": 2.8177,
-    "rmse": 3.6598
+    "mae": 2.8134,
+    "rmse": 3.6626
   },
   {
     "modelo": "over_under (Gradient Boosting)",
-    "brier": 0.2338,
+    "brier": 0.2342,
     "brier_moneda": 0.25,
-    "acierto_over_under": 0.5942,
-    "acierto_si_confianza_60": 0.6853,
-    "pct_jugadas_confianza_60": 0.4184,
+    "acierto_over_under": 0.6108,
+    "acierto_si_confianza_60": 0.6556,
+    "pct_jugadas_confianza_60": 0.5045,
     "calibracion": [
       {
         "rango": "0%-30%",
-        "n": 278,
-        "predicho": 0.232,
-        "real": 0.234
+        "n": 213,
+        "predicho": 0.222,
+        "real": 0.239
       },
       {
         "rango": "30%-40%",
-        "n": 572,
-        "predicho": 0.354,
-        "real": 0.35
+        "n": 826,
+        "predicho": 0.365,
+        "real": 0.368
       },
       {
         "rango": "40%-50%",
-        "n": 1172,
-        "predicho": 0.46,
-        "real": 0.468
+        "n": 752,
+        "predicho": 0.449,
+        "real": 0.428
       },
       {
         "rango": "50%-60%",
-        "n": 171,
-        "predicho": 0.546,
-        "real": 0.509
+        "n": 400,
+        "predicho": 0.529,
+        "real": 0.552
       },
       {
         "rango": "60%-70%",
-        "n": 24,
-        "predicho": 0.653,
-        "real": 0.625
+        "n": 82,
+        "predicho": 0.636,
+        "real": 0.585
       },
       {
         "rango": "70%-100%",
-        "n": 92,
-        "predicho": 0.729,
-        "real": 0.674
+        "n": 52,
+        "predicho": 0.784,
+        "real": 0.712
       }
     ]
   }
