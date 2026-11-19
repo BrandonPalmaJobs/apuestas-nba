@@ -2,68 +2,56 @@
   "modelos": [
     {
       "modelo": "Linea estilo casa (fraccion del total)",
-      "mae": 6.549
-    },
-    {
-      "modelo": "Promedio del cuarto (anotados/permitidos)",
-      "mae": 6.595
-    },
-    {
-      "modelo": "Ritmo del cuarto x puntos por posesion",
-      "mae": 6.607
-    },
-    {
-      "modelo": "Promedio ajustado (localia + back-to-back)",
       "mae": 6.561
     },
     {
+      "modelo": "Promedio del cuarto (anotados/permitidos)",
+      "mae": 6.634
+    },
+    {
+      "modelo": "Ritmo del cuarto x puntos por posesion",
+      "mae": 6.644
+    },
+    {
+      "modelo": "Promedio ajustado (localia + back-to-back)",
+      "mae": 6.592
+    },
+    {
       "modelo": "Regresion lineal",
-      "mae": 6.536
+      "mae": 6.549
     },
     {
       "modelo": "Gradient Boosting",
-      "mae": 6.7
+      "mae": 6.754
     }
   ],
   "over_under": {
-    "brier": 0.2631,
+    "brier": 0.2637,
     "brier_moneda": 0.25,
-    "acierto_over_under": 0.5154,
-    "acierto_si_confianza_60": 0.5514,
-    "pct_jugadas_confianza_60": 0.4115,
+    "acierto_over_under": 0.4751,
+    "acierto_si_confianza_60": 0.4054,
+    "pct_jugadas_confianza_60": 0.2835,
     "calibracion": [
       {
-        "rango": "0%-30%",
-        "n": 24,
-        "predicho": 0.227,
-        "real": 0.208
-      },
-      {
         "rango": "40%-50%",
-        "n": 20,
-        "predicho": 0.443,
-        "real": 0.3
+        "n": 38,
+        "predicho": 0.469,
+        "real": 0.289
       },
       {
         "rango": "50%-60%",
-        "n": 133,
-        "predicho": 0.564,
-        "real": 0.459
+        "n": 149,
+        "predicho": 0.565,
+        "real": 0.45
       },
       {
         "rango": "60%-70%",
-        "n": 24,
-        "predicho": 0.649,
-        "real": 0.292
-      },
-      {
-        "rango": "70%-100%",
-        "n": 46,
-        "predicho": 0.804,
-        "real": 0.543
+        "n": 74,
+        "predicho": 0.627,
+        "real": 0.405
       }
     ]
   },
-  "n_train": 2075,
-  "n_test": 519
+  "n_train": 2084,
+  "n_test": 522
 }
