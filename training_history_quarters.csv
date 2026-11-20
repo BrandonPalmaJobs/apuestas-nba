@@ -10,3 +10,4 @@ timestamp,n_games,modelo_q1,mae_q1,mae_q1_casa,acierto_ou_q1,modelo_q2,mae_q2,ma
 2026-11-17T18:38:47,2589,Regresion lineal,6.541,6.55,0.5097,Promedio ajustado (localia + back-to-back),6.685,6.72,0.5676
 2026-11-18T18:08:18,2594,Regresion lineal,6.536,6.549,0.5154,Promedio ajustado (localia + back-to-back),6.638,6.667,0.6077
 2026-11-19T18:21:47,2606,Regresion lineal,6.549,6.561,0.4751,Promedio ajustado (localia + back-to-back),6.687,6.708,0.5977
+2026-11-20T17:51:29,2610,Regresion lineal,6.574,6.584,0.5057,Promedio ajustado (localia + back-to-back),6.688,6.712,0.6054
