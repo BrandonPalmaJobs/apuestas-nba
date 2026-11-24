@@ -2,50 +2,50 @@
   "modelos": [
     {
       "modelo": "Linea estilo casa (fraccion del total)",
-      "mae": 6.708
+      "mae": 6.753
     },
     {
       "modelo": "Promedio del cuarto (anotados/permitidos)",
-      "mae": 6.729
+      "mae": 6.758
     },
     {
       "modelo": "Ritmo del cuarto x puntos por posesion",
-      "mae": 6.738
+      "mae": 6.768
     },
     {
       "modelo": "Promedio ajustado (localia + back-to-back)",
-      "mae": 6.68
+      "mae": 6.71
     },
     {
       "modelo": "Regresion lineal",
-      "mae": 6.731
+      "mae": 6.77
     },
     {
       "modelo": "Gradient Boosting",
-      "mae": 6.857
+      "mae": 6.917
     }
   ],
   "over_under": {
-    "brier": 0.2472,
+    "brier": 0.2453,
     "brier_moneda": 0.25,
-    "acierto_over_under": 0.6212,
-    "acierto_si_confianza_60": 0.5862,
-    "pct_jugadas_confianza_60": 0.1098,
+    "acierto_over_under": 0.6189,
+    "acierto_si_confianza_60": 0.5455,
+    "pct_jugadas_confianza_60": 0.083,
     "calibracion": [
       {
         "rango": "40%-50%",
-        "n": 116,
+        "n": 109,
         "predicho": 0.463,
-        "real": 0.362
+        "real": 0.349
       },
       {
         "rango": "50%-60%",
-        "n": 119,
-        "predicho": 0.545,
-        "real": 0.613
+        "n": 134,
+        "predicho": 0.549,
+        "real": 0.604
       }
     ]
   },
-  "n_train": 2105,
-  "n_test": 527
+  "n_train": 2113,
+  "n_test": 529
 }
