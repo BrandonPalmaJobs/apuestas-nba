@@ -43,3 +43,4 @@ timestamp,n_rows,modelo_total,mae_total,mae_total_baseline,modelo_margin,mae_mar
 2026-11-25T19:17:37,2649,Baseline (formula puntos totales),15.7433,15.7433,Regresion lineal,11.7617,12.0071,Gradient Boosting,0.1985,0.201
 2026-11-26T19:02:07,2658,Baseline (formula puntos totales),15.6143,15.6143,Regresion lineal,11.7413,12.0007,Gradient Boosting,0.1995,0.2021
 2026-11-27T19:00:44,2658,Baseline (formula puntos totales),15.6143,15.6143,Regresion lineal,11.7402,12.0007,Gradient Boosting,0.2003,0.2021
+2026-11-28T17:35:09,2669,Baseline (formula puntos totales),15.5467,15.5467,Regresion lineal,11.7624,12.0182,Gradient Boosting,0.1985,0.2038

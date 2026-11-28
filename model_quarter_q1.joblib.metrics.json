@@ -2,68 +2,68 @@
   "modelos": [
     {
       "modelo": "Linea estilo casa (fraccion del total)",
-      "mae": 6.641
+      "mae": 6.564
     },
     {
       "modelo": "Promedio del cuarto (anotados/permitidos)",
-      "mae": 6.711
+      "mae": 6.619
     },
     {
       "modelo": "Ritmo del cuarto x puntos por posesion",
-      "mae": 6.722
+      "mae": 6.631
     },
     {
       "modelo": "Promedio ajustado (localia + back-to-back)",
-      "mae": 6.676
+      "mae": 6.585
     },
     {
       "modelo": "Regresion lineal",
-      "mae": 6.635
+      "mae": 6.553
     },
     {
       "modelo": "Gradient Boosting",
-      "mae": 6.836
+      "mae": 6.716
     }
   ],
   "over_under": {
-    "brier": 0.2727,
+    "brier": 0.272,
     "brier_moneda": 0.25,
-    "acierto_over_under": 0.5,
-    "acierto_si_confianza_60": 0.4526,
-    "pct_jugadas_confianza_60": 0.3571,
+    "acierto_over_under": 0.4944,
+    "acierto_si_confianza_60": 0.5,
+    "pct_jugadas_confianza_60": 0.4195,
     "calibracion": [
       {
-        "rango": "30%-40%",
-        "n": 29,
-        "predicho": 0.359,
-        "real": 0.31
+        "rango": "0%-30%",
+        "n": 33,
+        "predicho": 0.225,
+        "real": 0.273
       },
       {
         "rango": "40%-50%",
-        "n": 43,
-        "predicho": 0.452,
-        "real": 0.395
+        "n": 27,
+        "predicho": 0.449,
+        "real": 0.444
       },
       {
         "rango": "50%-60%",
         "n": 128,
-        "predicho": 0.553,
-        "real": 0.5
+        "predicho": 0.556,
+        "real": 0.477
       },
       {
         "rango": "60%-70%",
-        "n": 23,
-        "predicho": 0.647,
-        "real": 0.174
+        "n": 20,
+        "predicho": 0.644,
+        "real": 0.2
       },
       {
         "rango": "70%-100%",
-        "n": 43,
-        "predicho": 0.781,
-        "real": 0.442
+        "n": 44,
+        "predicho": 0.788,
+        "real": 0.432
       }
     ]
   },
-  "n_train": 2123,
-  "n_test": 531
+  "n_train": 2132,
+  "n_test": 533
 }
